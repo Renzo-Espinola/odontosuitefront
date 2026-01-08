@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+:root {
+  --clinic-blue: #1e88e5;
+  --clinic-green: #22c55e;
+  --clinic-violet: #7c3aed;
+}
+
+html, body {
+  height: 100%;
+}
+
