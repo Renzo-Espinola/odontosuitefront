@@ -1,6 +1,8 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { BottomNav } from "./components/BottomNav"
 import { Layout } from "./components/Layout"
+import { BottomSheet } from "./components/BottomSheet"
+import { NewMovementSheet } from "./components/NewMovementSheet"
 
 import HomeScreen from "./screens/HomeScreen"
 import CashScreen from "./screens/CashScreen"
@@ -11,10 +13,19 @@ type Tab = "home" | "cash" | "new" | "appointments" | "settings"
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("home")
+  const [newOpen, setNewOpen] = useState(false)
+
+  // cuando tocan "new", abrimos sheet y volvemos al tab anterior (ej: home)
+  useEffect(() => {
+    if (activeTab === "new") {
+      setNewOpen(true)
+      setActiveTab("home")
+    }
+  }, [activeTab])
 
   return (
     <Layout>
-      <main className="flex-1 p-4 pb-32">
+      <main className="flex-1 p-6 pb-28">
         {activeTab === "home" && <HomeScreen />}
         {activeTab === "cash" && <CashScreen />}
         {activeTab === "appointments" && <AppointmentsScreen />}
@@ -22,6 +33,14 @@ export default function App() {
       </main>
 
       <BottomNav active={activeTab} onChange={setActiveTab} />
+
+      <BottomSheet open={newOpen} title="Nuevo movimiento" onClose={() => setNewOpen(false)}>
+        <NewMovementSheet
+          onCreated={() => {
+            setNewOpen(false)
+          }}
+        />
+      </BottomSheet>
     </Layout>
   )
 }
