@@ -1,5 +1,8 @@
 // src/lib/api.ts
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8082"
+const API_BASE_URL = import.meta.env.VITE_ADMIN_API_UR ?? "http://localhost:8082"
+const PATIENTS_API_URL = import.meta.env.VITE_PATIENTS_API_URL ?? "http://localhost:8081"
+
+export type AppointmentStatus = "SCHEDULED" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
 
 export type CashSummaryResponse = {
   from: string
@@ -129,6 +132,144 @@ export async function createMovement(bodyReq: CreateMoneyMovementRequest) {
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(bodyReq),
   })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export type AppointmentResponse = {
+  id: number
+  patientId: number
+  startTime: string
+  endTime: string | null
+  status: AppointmentStatus
+  reason: string | null
+  notes: string | null
+  createdLate: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+
+export type CreateAppointmentRequest = {
+  patientId: number
+  startTime: string // LocalDateTime
+  endTime?: string | null
+  reason?: string | null
+  notes?: string | null
+}
+
+export async function fetchAppointments(from: string, to: string): Promise<AppointmentResponse[]> {
+  const url = `${API_BASE_URL}/api/appointments?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+
+export async function fetchTodayAppointments(): Promise<AppointmentResponse[]> {
+  const { from, to } = todayRange()
+  return fetchAppointments(from, to)
+}
+
+export async function createAppointment(bodyReq: CreateAppointmentRequest): Promise<AppointmentResponse> {
+  const url = `${API_BASE_URL}/api/appointments`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export async function updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<AppointmentResponse> {
+  const url = `${API_BASE_URL}/api/appointments/${id}/status`
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ status }),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+
+// --- Patients service (PORT 8081) ---
+
+export type PatientResponse = {
+  id: number
+  firstName: string
+  lastName: string
+  documentNumber: string
+  birthDate: string | null
+  phone: string | null
+  email: string | null
+  address: string | null
+  obraSocial: string | null
+  obraSocialNumber: string | null
+  active: boolean
+}
+
+export async function searchPatientsByLastName(lastName: string): Promise<PatientResponse[]> {
+  const url = `${PATIENTS_API_URL}/api/patients?lastName=${encodeURIComponent(lastName)}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export async function searchPatients(q: string): Promise<PatientResponse[]> {
+  const url = `${PATIENTS_API_URL}/api/patients/search?q=${encodeURIComponent(q)}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
