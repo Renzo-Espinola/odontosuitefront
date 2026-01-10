@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { createMovement } from "../lib/api"
-import type { CreateMovementRequest } from "../lib/api"
+import type { MovementConcept, PaymentMethod } from "../lib/api"
 
-const INCOME_CONCEPTS = [
+const INCOME_CONCEPTS: MovementConcept[] = [
   "CONSULTATION",
   "CLEANING",
   "FILLING",
@@ -13,9 +13,9 @@ const INCOME_CONCEPTS = [
   "WHITENING",
   "CONTROL_VISIT",
   "OTHER_INCOME",
-] as const
+]
 
-const EXPENSE_CONCEPTS = [
+const EXPENSE_CONCEPTS: MovementConcept[] = [
   "MATERIALS",
   "LABORATORY",
   "SUPPLIERS",
@@ -25,9 +25,9 @@ const EXPENSE_CONCEPTS = [
   "TAXES",
   "MAINTENANCE",
   "OTHER_EXPENSE",
-] as const
+]
 
-const PAYMENT_METHODS = ["CASH", "CARD", "TRANSFER"] as const
+const PAYMENT_METHODS: PaymentMethod[] = ["CASH", "CARD", "TRANSFER"]
 
 function formatLabel(s: string) {
   return s
@@ -36,48 +36,78 @@ function formatLabel(s: string) {
     .replace(/(^|\s)\S/g, (m) => m.toUpperCase())
 }
 
-export function NewMovementSheet({
-  onCreated,
-}: {
-  onCreated: () => void
-}) {
-  const [nature, setNature] = useState<CreateMovementRequest["nature"]>("INCOME")
+/** ✅ Regla UI:
+ *  - Ingreso clínico => pide patientId
+ *  - OTHER_INCOME => NO pide patientId
+ *  - Egreso => NO pide patientId
+ */
+function requiresPatient(nature: "INCOME" | "EXPENSE", concept: MovementConcept) {
+  if (nature !== "INCOME") return false
+  return concept !== "OTHER_INCOME"
+}
+
+export function NewMovementSheet({ onCreated }: { onCreated: () => void }) {
+  const [nature, setNature] = useState<"INCOME" | "EXPENSE">("INCOME")
+
   const conceptOptions = useMemo(
     () => (nature === "INCOME" ? INCOME_CONCEPTS : EXPENSE_CONCEPTS),
     [nature]
   )
 
-  const [concept, setConcept] = useState<string>(conceptOptions[0])
-  const [paymentMethod, setPaymentMethod] = useState<string>("CASH")
+  const [concept, setConcept] = useState<MovementConcept>(conceptOptions[0])
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH")
   const [amount, setAmount] = useState<string>("")
   const [description, setDescription] = useState<string>("")
+  const [patientId, setPatientId] = useState<string>("")
+  const [appointmentId, setAppointmentId] = useState<string>("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // si cambia nature, resetea concept al primero válido
-  useMemo(() => {
+  // ✅ cuando cambia nature, resetea concept (useEffect, no useMemo)
+  useEffect(() => {
     setConcept(conceptOptions[0])
+    // también podés resetear patientId/appointmentId si querés
+    setPatientId("")
+    setAppointmentId("")
   }, [conceptOptions])
+
+const needsPatient = requiresPatient(nature, concept)
+
+useEffect(() => {
+  if (!needsPatient) {
+    setPatientId("")
+    setAppointmentId("")
+  }
+}, [needsPatient])
+  
+const parsedAmount = Number(amount.replace(",", ".").trim())
+const canSave =
+  !saving &&
+  Number.isFinite(parsedAmount) &&
+  parsedAmount > 0 &&
+  (!needsPatient || patientId.trim() !== "")
 
   async function submit() {
     try {
       setSaving(true)
       setError(null)
+      
+      const amt = amount.replace(",", ".").trim()
+      const amtNum = Number(amt)
+      if (!Number.isFinite(amtNum) || amtNum <= 0) throw new Error("Monto inválido")
 
-      const amt = Number(amount.replace(",", "."))
-      if (!Number.isFinite(amt) || amt <= 0) {
-        throw new Error("Monto inválido")
+      if (needsPatient) {
+        const pid = Number(patientId)
+        if (!Number.isFinite(pid) || pid <= 0) throw new Error("Paciente inválido")
       }
 
       await createMovement({
-        nature,
         concept,
         paymentMethod,
         amount: amt,
-        currency: "ARS",
-        description: description?.trim() ? description.trim() : undefined,
-        patientId: null,
-        appointmentId: null,
+        description: description?.trim() ? description.trim() : null,
+        patientId: needsPatient ? Number(patientId) : null,
+        appointmentId: appointmentId ? Number(appointmentId) : null,
       })
 
       onCreated()
@@ -122,7 +152,7 @@ export function NewMovementSheet({
         <span className="text-xs font-semibold text-gray-600">Concepto</span>
         <select
           value={concept}
-          onChange={(e) => setConcept(e.target.value)}
+          onChange={(e) => setConcept(e.target.value as MovementConcept)}
           className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
         >
           {conceptOptions.map((c) => (
@@ -138,7 +168,7 @@ export function NewMovementSheet({
         <span className="text-xs font-semibold text-gray-600">Medio de pago</span>
         <select
           value={paymentMethod}
-          onChange={(e) => setPaymentMethod(e.target.value)}
+          onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
           className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
         >
           {PAYMENT_METHODS.map((m) => (
@@ -151,15 +181,42 @@ export function NewMovementSheet({
 
       {/* Monto */}
       <label className="grid gap-2">
-        <span className="text-xs font-semibold text-gray-600">Monto (ARS)</span>
+        <span className="text-xs font-semibold text-gray-600">Monto</span>
         <input
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           inputMode="decimal"
-          placeholder="Ej: 3500"
+          placeholder="Ej: 3500 o 3500.50"
           className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
         />
       </label>
+
+      {/* Paciente/Turno sólo si corresponde */}
+      {needsPatient && (
+        <div className="grid grid-cols-2 gap-2">
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Paciente (ID)</span>
+            <input
+              value={patientId}
+              onChange={(e) => setPatientId(e.target.value.replace(/\D/g, ""))}
+              inputMode="numeric"
+              placeholder="Ej: 123"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Turno (opcional)</span>
+            <input
+              value={appointmentId}
+              onChange={(e) => setAppointmentId(e.target.value.replace(/\D/g, ""))}
+              inputMode="numeric"
+              placeholder="Ej: 456"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+        </div>
+      )}
 
       {/* Descripción */}
       <label className="grid gap-2">
@@ -181,7 +238,7 @@ export function NewMovementSheet({
       <button
         type="button"
         onClick={submit}
-        disabled={saving}
+        disabled={!canSave}
         className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:opacity-60"
       >
         {saving ? "Guardando…" : "Guardar movimiento"}

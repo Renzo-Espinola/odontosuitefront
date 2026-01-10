@@ -13,7 +13,6 @@ export async function fetchCashSummary(from: string, to: string): Promise<CashSu
   const url = `${API_BASE_URL}/api/reports/cash/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
   const res = await fetch(url, { headers: { Accept: "application/json" } })
 
-  // Si no es JSON, devolvemos el texto para debug (evita el error del "<!doctype")
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
     const body = await res.text()
@@ -55,13 +54,11 @@ export async function fetchMovements(from: string, to: string): Promise<MoneyMov
   return res.json()
 }
 
-// ✅ Resumen de caja de HOY
 export async function fetchTodayCashSummary(): Promise<CashSummaryResponse> {
   const { from, to } = todayRange()
   return fetchCashSummary(from, to)
 }
 
-// ✅ Movimientos de HOY
 export async function fetchTodayMovements(): Promise<MoneyMovementResponse[]> {
   const { from, to } = todayRange()
   return fetchMovements(from, to)
@@ -89,51 +86,43 @@ function todayRange(): { from: string; to: string } {
   }
 }
 
-// src/lib/api.ts
+/** ✅ Contrato REAL del backend:
+ *  CreateMoneyMovementRequest(concept, paymentMethod, amount, patientId?, appointmentId?, description?)
+ */
+export type MovementConcept =
+  | "CONSULTATION"
+  | "CLEANING"
+  | "FILLING"
+  | "ROOT_CANAL"
+  | "EXTRACTION"
+  | "ORTHODONTICS"
+  | "PROSTHESIS"
+  | "WHITENING"
+  | "CONTROL_VISIT"
+  | "OTHER_INCOME"
+  | "MATERIALS"
+  | "LABORATORY"
+  | "SUPPLIERS"
+  | "RENT"
+  | "SERVICES"
+  | "SALARIES"
+  | "TAXES"
+  | "MAINTENANCE"
+  | "OTHER_EXPENSE"
+
+export type PaymentMethod = "CASH" | "CARD" | "TRANSFER"
+
 export type CreateMoneyMovementRequest = {
-  nature: "INCOME" | "EXPENSE"
-  concept:
-    | "CONSULTATION"
-    | "CLEANING"
-    | "FILLING"
-    | "ROOT_CANAL"
-    | "EXTRACTION"
-    | "ORTHODONTICS"
-    | "PROSTHESIS"
-    | "WHITENING"
-    | "CONTROL_VISIT"
-    | "OTHER_INCOME"
-    | "MATERIALS"
-    | "LABORATORY"
-    | "SUPPLIERS"
-    | "RENT"
-    | "SERVICES"
-    | "SALARIES"
-    | "TAXES"
-    | "MAINTENANCE"
-    | "OTHER_EXPENSE"
-  paymentMethod: "CASH" | "CARD" | "TRANSFER"
-  amount: number
-  currency: "ARS" // por ahora fijo
-  description?: string
+  concept: MovementConcept
+  paymentMethod: PaymentMethod
+  /** BigDecimal-friendly: mandamos string para evitar problemas de float */
+  amount: string
   patientId?: number | null
   appointmentId?: number | null
-  createdAt?: string // opcional: si backend lo permite
+  description?: string | null
 }
 
-
-export type CreateMovementRequest = {
-  nature: "INCOME" | "EXPENSE"
-  concept: string
-  paymentMethod: string
-  amount: number
-  currency: string
-  description?: string
-  patientId?: number | null
-  appointmentId?: number | null
-}
-
-export async function createMovement(bodyReq: CreateMovementRequest) {
+export async function createMovement(bodyReq: CreateMoneyMovementRequest) {
   const url = `${API_BASE_URL}/api/cash/movements`
   const res = await fetch(url, {
     method: "POST",
@@ -153,4 +142,3 @@ export async function createMovement(bodyReq: CreateMovementRequest) {
 
   return res.json()
 }
-
