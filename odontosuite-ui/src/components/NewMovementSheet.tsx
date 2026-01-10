@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { createMovement } from "../lib/api"
 import type { MovementConcept, PaymentMethod } from "../lib/api"
 
+type Nature = "INCOME" | "EXPENSE"
+
 const INCOME_CONCEPTS: MovementConcept[] = [
   "CONSULTATION",
   "CLEANING",
@@ -36,18 +38,25 @@ function formatLabel(s: string) {
     .replace(/(^|\s)\S/g, (m) => m.toUpperCase())
 }
 
-/** ✅ Regla UI:
- *  - Ingreso clínico => pide patientId
- *  - OTHER_INCOME => NO pide patientId
- *  - Egreso => NO pide patientId
- */
-function requiresPatient(nature: "INCOME" | "EXPENSE", concept: MovementConcept) {
+function requiresPatient(nature: Nature, concept: MovementConcept) {
   if (nature !== "INCOME") return false
   return concept !== "OTHER_INCOME"
 }
 
-export function NewMovementSheet({ onCreated }: { onCreated: () => void }) {
-  const [nature, setNature] = useState<"INCOME" | "EXPENSE">("INCOME")
+export function NewMovementSheet({
+  onCreated,
+  initialNature = "INCOME",
+}: {
+  onCreated: () => void
+  initialNature?: Nature
+}) {
+  // ✅ nature primero, porque se usa en conceptOptions
+  const [nature, setNature] = useState<Nature>(initialNature)
+
+  // ✅ si App abre con otra naturaleza, sincronizamos
+  useEffect(() => {
+    setNature(initialNature)
+  }, [initialNature])
 
   const conceptOptions = useMemo(
     () => (nature === "INCOME" ? INCOME_CONCEPTS : EXPENSE_CONCEPTS),
@@ -63,38 +72,37 @@ export function NewMovementSheet({ onCreated }: { onCreated: () => void }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // ✅ cuando cambia nature, resetea concept (useEffect, no useMemo)
+  // cuando cambia nature (por toggle o por initialNature), resetea concept
   useEffect(() => {
     setConcept(conceptOptions[0])
-    // también podés resetear patientId/appointmentId si querés
     setPatientId("")
     setAppointmentId("")
   }, [conceptOptions])
 
-const needsPatient = requiresPatient(nature, concept)
+  const needsPatient = requiresPatient(nature, concept)
 
-useEffect(() => {
-  if (!needsPatient) {
-    setPatientId("")
-    setAppointmentId("")
-  }
-}, [needsPatient])
-  
-const parsedAmount = Number(amount.replace(",", ".").trim())
-const canSave =
-  !saving &&
-  Number.isFinite(parsedAmount) &&
-  parsedAmount > 0 &&
-  (!needsPatient || patientId.trim() !== "")
+  useEffect(() => {
+    if (!needsPatient) {
+      setPatientId("")
+      setAppointmentId("")
+    }
+  }, [needsPatient])
+
+  const parsedAmount = Number(amount.replace(",", ".").trim())
+  const canSave =
+    !saving &&
+    Number.isFinite(parsedAmount) &&
+    parsedAmount > 0 &&
+    (!needsPatient || patientId.trim() !== "")
 
   async function submit() {
     try {
       setSaving(true)
       setError(null)
-      
+
       const amt = amount.replace(",", ".").trim()
-      const amtNum = Number(amt)
-      if (!Number.isFinite(amtNum) || amtNum <= 0) throw new Error("Monto inválido")
+      const amtNumSubmit = Number(amt)
+      if (!Number.isFinite(amtNumSubmit) || amtNumSubmit <= 0) throw new Error("Monto inválido")
 
       if (needsPatient) {
         const pid = Number(patientId)
@@ -120,7 +128,6 @@ const canSave =
 
   return (
     <div className="grid gap-4">
-      {/* Toggle INCOME/EXPENSE */}
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -147,7 +154,6 @@ const canSave =
         </button>
       </div>
 
-      {/* Concepto */}
       <label className="grid gap-2">
         <span className="text-xs font-semibold text-gray-600">Concepto</span>
         <select
@@ -163,7 +169,6 @@ const canSave =
         </select>
       </label>
 
-      {/* Medio de pago */}
       <label className="grid gap-2">
         <span className="text-xs font-semibold text-gray-600">Medio de pago</span>
         <select
@@ -179,7 +184,6 @@ const canSave =
         </select>
       </label>
 
-      {/* Monto */}
       <label className="grid gap-2">
         <span className="text-xs font-semibold text-gray-600">Monto</span>
         <input
@@ -191,7 +195,6 @@ const canSave =
         />
       </label>
 
-      {/* Paciente/Turno sólo si corresponde */}
       {needsPatient && (
         <div className="grid grid-cols-2 gap-2">
           <label className="grid gap-2">
@@ -218,7 +221,6 @@ const canSave =
         </div>
       )}
 
-      {/* Descripción */}
       <label className="grid gap-2">
         <span className="text-xs font-semibold text-gray-600">Descripción (opcional)</span>
         <input
@@ -239,7 +241,7 @@ const canSave =
         type="button"
         onClick={submit}
         disabled={!canSave}
-        className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:opacity-60"
+        className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
       >
         {saving ? "Guardando…" : "Guardar movimiento"}
       </button>

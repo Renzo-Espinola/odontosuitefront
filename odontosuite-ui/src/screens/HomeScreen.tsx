@@ -9,7 +9,11 @@ function formatARS(n: number) {
   })
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({
+  onNewMovement,
+}: {
+  onNewMovement: (nature: "INCOME" | "EXPENSE") => void
+}) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<CashSummaryResponse | null>(null)
@@ -38,6 +42,7 @@ export default function HomeScreen() {
   const todayBalance = useMemo(() => summary?.netTotal ?? 0, [summary])
   const todayIncome = useMemo(() => summary?.totalIncome ?? 0, [summary])
   const todayExpense = useMemo(() => summary?.totalExpense ?? 0, [summary])
+  
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -86,9 +91,8 @@ export default function HomeScreen() {
 
           <div className="mt-4 grid grid-cols-2 gap-3">
             <button
-              type="button"
-              className="rounded-2xl bg-(--clinic-green) px-4 py-4 text-left text-white shadow-sm active:scale-[0.99]"
-            >
+              type="button" onClick={() => onNewMovement("INCOME")}
+              className="rounded-2xl bg-(--clinic-green) px-4 py-4 text-left text-white shadow-sm active:scale-[0.99]">
               <div className="flex items-center gap-2">
                 <ArrowUpRight size={18} />
                 <span className="text-sm font-semibold">Ingreso</span>
@@ -97,9 +101,8 @@ export default function HomeScreen() {
             </button>
 
             <button
-              type="button"
-              className="rounded-2xl bg-(--clinic-violet) px-4 py-4 text-left text-white shadow-sm active:scale-[0.99]"
-            >
+              type="button" onClick={() => onNewMovement("EXPENSE")}
+              className="rounded-2xl bg-(--clinic-violet) px-4 py-4 text-left text-white shadow-sm active:scale-[0.99]">
               <div className="flex items-center gap-2">
                 <ArrowDownRight size={18} />
                 <span className="text-sm font-semibold">Egreso</span>

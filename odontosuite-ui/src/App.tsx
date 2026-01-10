@@ -1,3 +1,4 @@
+// App.tsx
 import { useEffect, useState } from "react"
 import { BottomNav } from "./components/BottomNav"
 import { Layout } from "./components/Layout"
@@ -10,14 +11,26 @@ import AppointmentsScreen from "./screens/AppointmentsScreen"
 import SettingsScreen from "./screens/SettingsScreen"
 
 type Tab = "home" | "cash" | "new" | "appointments" | "settings"
+type Nature = "INCOME" | "EXPENSE"
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("home")
   const [newOpen, setNewOpen] = useState(false)
+  const [newNature, setNewNature] = useState<Nature>("INCOME")
 
+  function openNewMovement(nature: Nature) {
+    setNewNature(nature)
+    setNewOpen(true)
+  }
+
+  function closeNewMovement() {
+    setNewOpen(false)
+  }
+
+  // BottomNav: cuando tocan "new", abre en INCOME por default
   useEffect(() => {
     if (activeTab === "new") {
-      setNewOpen(true)
+      openNewMovement("INCOME")
       setActiveTab("home")
     }
   }, [activeTab])
@@ -25,7 +38,7 @@ export default function App() {
   return (
     <Layout>
       <main className="flex-1 p-6 pb-28">
-        {activeTab === "home" && <HomeScreen />}
+        {activeTab === "home" && <HomeScreen onNewMovement={openNewMovement} />}
         {activeTab === "cash" && <CashScreen />}
         {activeTab === "appointments" && <AppointmentsScreen />}
         {activeTab === "settings" && <SettingsScreen />}
@@ -33,12 +46,11 @@ export default function App() {
 
       <BottomNav active={activeTab} onChange={setActiveTab} newOpen={newOpen} />
 
-      <BottomSheet open={newOpen} title="Nuevo movimiento" onClose={() => setNewOpen(false)}>
+      <BottomSheet open={newOpen} title="Nuevo movimiento" onClose={closeNewMovement}>
         <NewMovementSheet
-          key={newOpen ? "open" : "closed"}
-          onCreated={() => {
-            setNewOpen(false)
-          }}
+          key={`${newOpen}-${newNature}`}   // fuerza reset al cambiar tipo
+          initialNature={newNature}
+          onCreated={closeNewMovement}
         />
       </BottomSheet>
     </Layout>
