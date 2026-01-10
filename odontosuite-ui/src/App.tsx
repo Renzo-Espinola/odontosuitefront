@@ -15,7 +15,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("home")
   const [newOpen, setNewOpen] = useState(false)
 
-  // cuando tocan "new", abrimos sheet y volvemos al tab anterior (ej: home)
   useEffect(() => {
     if (activeTab === "new") {
       setNewOpen(true)
@@ -32,10 +31,11 @@ export default function App() {
         {activeTab === "settings" && <SettingsScreen />}
       </main>
 
-      <BottomNav active={activeTab} onChange={setActiveTab} />
+      <BottomNav active={activeTab} onChange={setActiveTab} newOpen={newOpen} />
 
       <BottomSheet open={newOpen} title="Nuevo movimiento" onClose={() => setNewOpen(false)}>
         <NewMovementSheet
+          key={newOpen ? "open" : "closed"}
           onCreated={() => {
             setNewOpen(false)
           }}
