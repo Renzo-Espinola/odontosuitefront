@@ -1,14 +1,23 @@
+// src/components/NewAppointmentSheet.tsx
 import { useEffect, useMemo, useState } from "react"
 import { createAppointment, searchPatients } from "../lib/api"
-import type { CreateAppointmentRequest, PatientResponse } from "../lib/api"
+import type { CreateAppointmentRequest, PatientResponse, CreatePatientRequest } from "../lib/api"
+import { BottomSheet } from "./BottomSheet"
+import { NewPatientSheet } from "./NewPatientSheet"
+
+function toDateTimeLocalValue(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
+    d.getMinutes()
+  )}`
+}
 
 // input type="datetime-local" devuelve "YYYY-MM-DDTHH:mm"
 function normalizeDateTimeLocal(v: string) {
   const t = v.trim()
   if (!t) return ""
-  // datetime-local: YYYY-MM-DDTHH:mm
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t) && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(t)) {
-    return "" // fuerza error amigable
+    return ""
   }
   return t.length === 16 ? `${t}:00` : t
 }
@@ -17,23 +26,29 @@ function patientLabel(p: PatientResponse) {
   return `${p.lastName}, ${p.firstName} · DNI ${p.documentNumber} (#${p.id})`
 }
 
-function toDateTimeLocalMin(d: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours()
-  )}:${pad(d.getMinutes())}`
+function guessInitialPatientFromQuery(q: string): Partial<CreatePatientRequest> {
+  const t = q.trim()
+  if (!t) return {}
+
+  // si es todo dígitos, asumimos DNI
+  if (/^\d+$/.test(t)) return { documentNumber: t }
+
+  // si parece "Apellido Nombre" (2+ palabras)
+  const parts = t.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) {
+    return { lastName: parts[0], firstName: parts.slice(1).join(" ") }
+  }
+
+  // una sola palabra => la ponemos como apellido (es lo más común en búsquedas)
+  return { lastName: t }
 }
 
 export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
-  const [startTime, setStartTime] = useState("")
+  const [startTime, setStartTime] = useState(() => toDateTimeLocalValue(new Date()))
   const [reason, setReason] = useState("")
   const [notes, setNotes] = useState("")
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const minStart = useMemo(() => {
-  const d = new Date()
-  d.setSeconds(0, 0)
-  return toDateTimeLocalMin(d)}, [])
 
   // --- Autocomplete paciente
   const [query, setQuery] = useState("")
@@ -41,9 +56,11 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
   const [results, setResults] = useState<PatientResponse[]>([])
   const [selected, setSelected] = useState<PatientResponse | null>(null)
 
-  // Debounce search
+  // Sheet alta paciente
+  const [openNewPatient, setOpenNewPatient] = useState(false)
+
   useEffect(() => {
-    if (selected) return // si ya elegiste, no busques
+    if (selected) return
     const q = query.trim()
 
     if (q.length < 2) {
@@ -70,31 +87,36 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
   const canSave = !saving && !!selected && !!normalizeDateTimeLocal(startTime)
 
   async function submit() {
-  try {
-    setSaving(true)
-    setError(null)
+    try {
+      setSaving(true)
+      setError(null)
 
-    if (!selected) throw new Error("Seleccioná un paciente")
+      if (!selected) throw new Error("Seleccioná un paciente")
 
-    const normalized = normalizeDateTimeLocal(startTime)
-    if (!normalized) throw new Error("Seleccioná una fecha válida")
+      const normalized = normalizeDateTimeLocal(startTime)
+      if (!normalized) throw new Error("Seleccioná una fecha válida")
 
-    const payload: CreateAppointmentRequest = {
-      patientId: selected.id,
-      startTime: normalized,
-      reason: reason.trim() ? reason.trim() : null,
-      notes: notes.trim() ? notes.trim() : null,
+      const payload: CreateAppointmentRequest = {
+        patientId: selected.id,
+        startTime: normalized,
+        reason: reason.trim() ? reason.trim() : null,
+        notes: notes.trim() ? notes.trim() : null,
+      }
+
+      await createAppointment(payload)
+      onCreated()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg.includes("HTTP 409") ? "Ya existe un turno en ese horario." : msg)
+    } finally {
+      setSaving(false)
     }
-
-    await createAppointment(payload)
-    onCreated()
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    setError(msg.includes("HTTP 409") ? "Ya existe un turno en ese horario." : msg)
-  } finally {
-    setSaving(false)
   }
-}
+
+  const showCreatePatientCTA =
+    !selected && query.trim().length >= 2 && !searching && results.length === 0
+
+  const initialPatient = useMemo(() => guessInitialPatientFromQuery(query), [query])
 
   return (
     <div className="grid gap-4">
@@ -118,8 +140,17 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
 
           {searching && <div className="text-xs text-gray-500">Buscando…</div>}
 
-          {query.trim().length >= 2 && !searching && results.length === 0 && (
-            <div className="text-xs text-gray-500">Sin resultados</div>
+          {showCreatePatientCTA && (
+            <div className="rounded-2xl border border-dashed border-gray-200 p-3">
+              <div className="text-xs text-gray-600">Sin resultados.</div>
+              <button
+                type="button"
+                onClick={() => setOpenNewPatient(true)}
+                className="mt-2 w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm font-semibold text-gray-900 hover:bg-gray-50 active:scale-[0.99]"
+              >
+                Crear paciente
+              </button>
+            </div>
           )}
 
           {results.length > 0 && (
@@ -133,7 +164,7 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
                     setResults([])
                     setQuery("")
                   }}
-                  className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 border-b last:border-b-0 border-gray-100"
+                  className="w-full border-b border-gray-100 px-4 py-3 text-left text-sm hover:bg-gray-50 last:border-b-0"
                 >
                   <div className="font-semibold text-gray-900">
                     {p.lastName}, {p.firstName}
@@ -171,18 +202,11 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
         <input
           type="datetime-local"
           value={startTime}
-          min={minStart}
           onChange={(e) => setStartTime(e.target.value)}
           className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
         />
         <span className="text-xs text-gray-400">Duración: 30 min (por defecto)</span>
       </label>
-
-      {!startTime && (
-        <div className="text-xs text-gray-500">
-            Seleccioná fecha y hora para habilitar “Crear turno”.
-        </div>
-      )}
 
       {/* Motivo */}
       <label className="grid gap-2">
@@ -211,10 +235,23 @@ export function NewAppointmentSheet({ onCreated }: { onCreated: () => void }) {
         type="button"
         onClick={submit}
         disabled={!canSave}
-        className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
+        className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
       >
         {saving ? "Guardando…" : "Crear turno"}
       </button>
+
+      {/* BottomSheet: Crear paciente */}
+      <BottomSheet open={openNewPatient} title="Nuevo paciente" onClose={() => setOpenNewPatient(false)}>
+        <NewPatientSheet
+          initial={initialPatient}
+          onCreated={(p) => {
+            setOpenNewPatient(false)
+            setSelected(p)
+            setResults([])
+            setQuery("")
+          }}
+        />
+      </BottomSheet>
     </div>
   )
 }

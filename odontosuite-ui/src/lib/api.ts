@@ -283,3 +283,52 @@ export async function searchPatients(q: string): Promise<PatientResponse[]> {
 
   return res.json()
 }
+
+export type CreatePatientRequest = {
+  firstName: string
+  lastName: string
+  documentNumber: string
+  birthDate?: string | null // YYYY-MM-DD
+  phone?: string | null
+  email?: string | null
+  address?: string | null
+  obraSocial?: string | null
+  obraSocialNumber?: string | null
+}
+
+export async function createPatient(bodyReq: CreatePatientRequest): Promise<PatientResponse> {
+  const url = `${PATIENTS_API_URL}/api/patients`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+  return res.json()
+}
+
+export async function fetchPatients(lastName?: string): Promise<PatientResponse[]> {
+  const qs = lastName?.trim() ? `?lastName=${encodeURIComponent(lastName.trim())}` : ""
+  const url = `${PATIENTS_API_URL}/api/patients${qs}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+  return res.json()
+}
