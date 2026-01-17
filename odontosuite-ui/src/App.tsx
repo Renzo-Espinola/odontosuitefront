@@ -1,6 +1,6 @@
 // App.tsx
 import { useEffect, useState } from "react"
-import { BottomNav } from "./components/BottomNav"
+import { BottomNav, type Tab } from "./components/BottomNav"
 import { Layout } from "./components/Layout"
 import { BottomSheet } from "./components/BottomSheet"
 import { NewMovementSheet } from "./components/NewMovementSheet"
@@ -9,8 +9,8 @@ import HomeScreen from "./screens/HomeScreen"
 import CashScreen from "./screens/CashScreen"
 import AppointmentsScreen from "./screens/AppointmentsScreen"
 import SettingsScreen from "./screens/SettingsScreen"
+import ClinicalScreen from "./screens/ClinicalScreen"
 
-type Tab = "home" | "cash" | "new" | "appointments" | "settings"
 type Nature = "INCOME" | "EXPENSE"
 
 export default function App() {
@@ -42,6 +42,7 @@ export default function App() {
         {activeTab === "cash" && <CashScreen />}
         {activeTab === "appointments" && <AppointmentsScreen />}
         {activeTab === "settings" && <SettingsScreen />}
+        {activeTab === "clinical" && <ClinicalScreen />}
       </main>
 
       <BottomNav active={activeTab} onChange={setActiveTab} newOpen={newOpen} />

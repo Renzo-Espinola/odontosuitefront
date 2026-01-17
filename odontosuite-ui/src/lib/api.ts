@@ -332,3 +332,85 @@ export async function fetchPatients(lastName?: string): Promise<PatientResponse[
   }
   return res.json()
 }
+
+// --- Patients service (PORT 8081) --- (mismo PATIENTS_API_URL)
+
+export type ToothSurface = "GENERAL" | "O" | "M" | "D" | "B" | "L"
+
+export type OdontogramStatus =
+  | "HEALTHY"
+  | "CARIES"
+  | "FILLING"
+  | "CROWN"
+  | "ENDODONTIC"
+  | "IMPLANT"
+  | "MISSING"
+  | "EXTRACTED"
+
+export type OdontogramItemResponse = {
+  id: number
+  toothCode: string
+  surface: ToothSurface
+  status: OdontogramStatus
+  note: string | null
+}
+
+export type OdontogramResponse = {
+  odontogramId: number
+  patientId: number
+  items: OdontogramItemResponse[]
+}
+
+export type OdontogramItemUpsertRequest = {
+  toothCode: string
+  surface?: ToothSurface | null // UI puede mandar null
+  status: OdontogramStatus
+  note?: string | null
+  createClinicalNote?: boolean
+  clinicalDiagnosis?: string | null
+  clinicalTreatment?: string | null
+  clinicalObservations?: string | null
+}
+
+async function assertJson(res: Response) {
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+}
+
+export async function fetchOdontogram(patientId: number): Promise<OdontogramResponse> {
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function upsertOdontogramItem(
+  patientId: number,
+  bodyReq: OdontogramItemUpsertRequest
+): Promise<OdontogramResponse> {
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items`
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function deleteOdontogramItem(patientId: number, itemId: number): Promise<void> {
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items/${itemId}`
+  const res = await fetch(url, { method: "DELETE" })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+}
+
