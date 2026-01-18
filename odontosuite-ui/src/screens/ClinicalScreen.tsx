@@ -1,9 +1,17 @@
 // ClinicalScreen.tsx
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   fetchOdontogram,
   upsertOdontogramItem,
   searchPatients,
+  fetchClinicalEvents,
+  createClinicalEvent,  
+  fetchTreatmentPlansByPatient,
+  createTreatmentPlanItem,
+  type TreatmentPlanItemResponse,
+  type TreatmentProcedure,
+  type TreatmentStatus,
+  type ClinicalEventResponse,
   type OdontogramResponse,
   type ToothSurface,
   type OdontogramStatus,
@@ -15,6 +23,15 @@ import { NewPatientSheet } from "../components/NewPatientSheet"
 import { RefreshCw } from "lucide-react"
 
 type HttpError = { status: number; message: string; raw?: string }
+
+// -------------------- Modelo UI (hallazgo) --------------------
+type Finding = {
+  toothCode: string
+  surface: ToothSurface
+  status: OdontogramStatus
+  note: string | null
+  key: string
+}
 
 const SURFACES: ToothSurface[] = ["GENERAL", "O", "M", "D", "B", "L"]
 const LETTER_SURFACES: ToothSurface[] = ["O", "M", "D", "B", "L"]
@@ -75,7 +92,7 @@ function guessInitialPatientFromQuery(q: string): Partial<CreatePatientRequest> 
   return { lastName: t }
 }
 
-// ✅ Badge tipo "M+D" (máx 3 letras, si hay más: "M+D+B+")
+// Badge tipo "M+D" (máx 3 letras; si hay más: "M+D+B+")
 function surfacesBadgeFor(idx: Map<string, any>, toothCode: string) {
   const present = LETTER_SURFACES.filter((s) => idx.has(keyOf(toothCode, s)))
   if (present.length === 0) return null
@@ -83,7 +100,7 @@ function surfacesBadgeFor(idx: Map<string, any>, toothCode: string) {
   return present.length > 3 ? `${shown}+` : shown
 }
 
-// ✅ Color global del diente: GENERAL manda si existe; sino “peor” entre superficies
+// Color global del diente: GENERAL manda; si no existe, “peor” entre superficies
 function displayStatusForTooth(
   idx: Map<string, { id: number; status: OdontogramStatus; note: string | null }>,
   toothCode: string
@@ -104,6 +121,127 @@ function displayStatusForTooth(
     }
   }
   return best
+}
+
+function summarizeTeeth(
+  idx: Map<string, { id: number; status: OdontogramStatus; note: string | null }>,
+  toothCodes: string[]
+) {
+  let caries = 0
+  let fillings = 0
+  let endodontics = 0
+  let extracted = 0
+  let missing = 0
+  let implants = 0
+  let crowns = 0
+
+  for (const t of toothCodes) {
+    const s = displayStatusForTooth(idx, t)
+    if (s === "CARIES") caries++
+    else if (s === "FILLING") fillings++
+    else if (s === "ENDODONTIC") endodontics++
+    else if (s === "EXTRACTED") extracted++
+    else if (s === "MISSING") missing++
+    else if (s === "IMPLANT") implants++
+    else if (s === "CROWN") crowns++
+  }
+
+  return { caries, fillings, endodontics, extracted, missing, implants, crowns }
+}
+
+function sortFindingsForTooth(arr: Finding[]) {
+  return [...arr].sort((a, b) => {
+    const sa = SURFACE_ORDER[a.surface] ?? 99
+    const sb = SURFACE_ORDER[b.surface] ?? 99
+    if (sa !== sb) return sa - sb
+    return (STATUS_WEIGHT[b.status] ?? 0) - (STATUS_WEIGHT[a.status] ?? 0)
+  })
+}
+
+function eventTitle(e: ClinicalEventResponse) {
+  if (e.type === "NOTE") return "Nota clínica"
+  return "Cambio odontograma"
+}
+
+function eventSubtitle(e: ClinicalEventResponse) {
+  if (e.type === "NOTE") return e.note ?? ""
+  const tooth = e.toothCode ? `Pieza ${e.toothCode}` : ""
+  const surf = e.surface ? ` · ${surfaceLabel(e.surface)}` : ""
+  const from = e.fromStatus ? statusLabel(e.fromStatus) : ""
+  const to = e.toStatus ? statusLabel(e.toStatus) : ""
+  const change = from && to ? `: ${from} → ${to}` : ""
+  return `${tooth}${surf}${change}`.trim()
+}
+
+function fmtDate(iso: string) {
+  const d = new Date(iso)
+  return d.toLocaleString("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+function CollapsibleSection({
+  storageKey,
+  title,
+  subtitle,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  storageKey: string
+  title: string
+  subtitle?: string
+  count?: number
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const fullKey = `odontosuite:clinical:${storageKey}`
+
+  const [open, setOpen] = useState(() => {
+    try {
+      const raw = localStorage.getItem(fullKey)
+      if (raw === "1") return true
+      if (raw === "0") return false
+      return defaultOpen
+    } catch {
+      return defaultOpen
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(fullKey, open ? "1" : "0")
+    } catch {
+      // ignore (private mode / storage disabled)
+    }
+  }, [fullKey, open])
+
+  return (
+    <section className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between px-4 py-3"
+      >
+        <div className="text-left">
+          <div className="text-sm font-semibold text-gray-900">{title}</div>
+          {subtitle && <div className="text-xs text-gray-500">{subtitle}</div>}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          {count !== undefined && <span>{count}</span>}
+          <span>{open ? "▼" : "▶"}</span>
+        </div>
+      </button>
+
+      {open && <div className="border-t border-gray-100 p-4">{children}</div>}
+    </section>
+  )
 }
 
 export default function ClinicalScreen() {
@@ -130,8 +268,46 @@ export default function ClinicalScreen() {
   const [openNewPatient, setOpenNewPatient] = useState(false)
   const initialPatient = useMemo(() => guessInitialPatientFromQuery(query), [query])
 
-  // para evitar que el sync de surface pise status/nota cuando forzamos GENERAL o precargamos en openEditor
+  // evitar que sync pise status/nota cuando forzamos GENERAL o precargamos al abrir
   const [skipSyncOnce, setSkipSyncOnce] = useState(false)
+
+  // micro-ux
+  const [highlightTooth, setHighlightTooth] = useState<string | null>(null)
+  const [savedTooth, setSavedTooth] = useState<string | null>(null)
+
+  const odontogramRef = useRef<HTMLDivElement | null>(null)
+  const toothRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const [flashOdontogram, setFlashOdontogram] = useState(false)
+
+  // historia clínica (timeline)
+  const [events, setEvents] = useState<ClinicalEventResponse[]>([])
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [tpItems, setTpItems] = useState<TreatmentPlanItemResponse[]>([])
+  const [tpLoading, setTpLoading] = useState(false)
+
+  const [openTp, setOpenTp] = useState(false)
+  const [tpProcedure, setTpProcedure] = useState<TreatmentProcedure>("CLEANING")
+  const [tpStatus, setTpStatus] = useState<TreatmentStatus>("PLANNED")
+  const [tpTooth, setTpTooth] = useState<string>("")
+  const [tpSurface, setTpSurface] = useState<ToothSurface>("GENERAL")
+  const [tpEstimated, setTpEstimated] = useState<string>("")
+  const [tpNotes, setTpNotes] = useState<string>("")
+
+
+  function setToothRef(code: string) {
+    return (el: HTMLButtonElement | null) => {
+      toothRefs.current[code] = el
+    }
+  }
+
+  function scrollToTooth(code: string) {
+    const el = toothRefs.current[code]
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      return
+    }
+    odontogramRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+  }
 
   function requiresGeneral(s: OdontogramStatus) {
     return s === "IMPLANT" || s === "EXTRACTED" || s === "MISSING"
@@ -143,6 +319,13 @@ export default function ClinicalScreen() {
     setResults([])
     setError(null)
     setPatientId(p.id)
+  }
+
+  function pulseHighlight(code: string, ms = 900) {
+    setHighlightTooth(code)
+    window.setTimeout(() => {
+      setHighlightTooth((cur) => (cur === code ? null : cur))
+    }, ms)
   }
 
   async function load() {
@@ -177,13 +360,48 @@ export default function ClinicalScreen() {
     }
   }
 
-  // cargar odontograma cuando se selecciona paciente
+  // cargar odontograma al seleccionar paciente
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patientId])
 
-  // debounce buscador
+  // cargar historia clínica al seleccionar paciente
+  useEffect(() => {
+    if (!patientId) {
+      setEvents([])
+      return
+    }
+    ;(async () => {
+      try {
+        setEventsLoading(true)
+        const ev = await fetchClinicalEvents(patientId, 50)
+        setEvents(ev)
+      } catch {
+        setEvents([])
+      } finally {
+        setEventsLoading(false)
+      }
+    })()
+  }, [patientId])
+
+  useEffect(() => {
+    if (!patientId) {
+      setTpItems([])
+      return
+    }
+    ;(async () => {
+      try {
+        setTpLoading(true)
+        const items = await fetchTreatmentPlansByPatient(patientId)
+        setTpItems(items)
+      } finally {
+        setTpLoading(false)
+      }
+    })()
+  }, [patientId])
+
+  // debounce buscador paciente
   useEffect(() => {
     if (selected) return
 
@@ -217,13 +435,13 @@ export default function ClinicalScreen() {
     return m
   }, [data])
 
-  // badge del modal
+  // badge modal
   const modalBadge = useMemo(() => {
     if (!selTooth) return null
     return surfacesBadgeFor(index, selTooth)
   }, [index, selTooth])
 
-  // sync del modal: cuando cambia (pieza/superficie) cargamos lo existente
+  // sync modal: cuando cambia (pieza/superficie) cargar lo existente
   useEffect(() => {
     if (!open || !selTooth) return
 
@@ -237,7 +455,7 @@ export default function ClinicalScreen() {
     setNote(existing?.note ?? "")
   }, [open, selTooth, surface, index, skipSyncOnce])
 
-  // si el user elige un estado que exige GENERAL, forzamos surface sin perder status/nota
+  // si estado exige GENERAL, forzamos surface sin perder status/nota
   useEffect(() => {
     if (!open) return
     if (requiresGeneral(status) && surface !== "GENERAL") {
@@ -247,13 +465,12 @@ export default function ClinicalScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, open])
 
-  // abrir modal (opcionalmente en una superficie concreta, usado por Hallazgos)
+  // abrir modal (opcionalmente en superficie concreta)
   function openEditor(toothCode: string, surf?: ToothSurface) {
     setError(null)
     setSelTooth(toothCode)
 
     let chosen: ToothSurface
-
     if (surf) {
       chosen = surf
     } else {
@@ -277,7 +494,6 @@ export default function ClinicalScreen() {
 
   const surfaceLocked = requiresGeneral(status)
 
-  // ✅ Guardado optimista: setData(res) y listo (sin load() que pisa)
   async function save() {
     if (!patientId) return
 
@@ -286,50 +502,93 @@ export default function ClinicalScreen() {
       return
     }
 
+    const prev = index.get(keyOf(selTooth, surface))?.status ?? "HEALTHY"
+    const noteTrimmed = note.trim() ? note.trim() : null
+
     try {
       setError(null)
+
+      // 1) actualizo odontograma
       const res = await upsertOdontogramItem(patientId, {
         toothCode: selTooth,
         surface,
         status,
-        note: note.trim() ? note.trim() : null,
+        note: noteTrimmed,
         createClinicalNote: false,
       })
+
       setData(res)
       setOpen(false)
+
+      // 2) creo evento
+      const created = await createClinicalEvent({
+        patientId,
+        type: "ODONTOGRAM_CHANGE",
+        toothCode: selTooth,
+        surface,
+        fromStatus: prev,
+        toStatus: status,
+        note: noteTrimmed,
+      })
+
+      // 3) actualizo timeline sin refetch
+      setEvents((cur) => [created, ...cur])
+
+      // micro-ux
+      pulseHighlight(selTooth)
+      setSavedTooth(selTooth)
+      window.setTimeout(() => setSavedTooth(null), 650)
     } catch (e) {
       setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
     }
   }
 
-  // --------- render grid FDI (adulto) ----------
-  const upper = ["18","17","16","15","14","13","12","11","21","22","23","24","25","26","27","28"]
-  const lower = ["48","47","46","45","44","43","42","41","31","32","33","34","35","36","37","38"]
+  // --------- grid FDI ----------
+  const upper = ["18", "17", "16", "15", "14", "13", "12", "11", "21", "22", "23", "24", "25", "26", "27", "28"]
+  const lower = ["48", "47", "46", "45", "44", "43", "42", "41", "31", "32", "33", "34", "35", "36", "37", "38"]
+  const allTeeth = useMemo(() => [...upper, ...lower], [])
+  const summary = useMemo(() => summarizeTeeth(index, allTeeth), [index, allTeeth])
 
   function toothPill(toothCode: string) {
     const badge = surfacesBadgeFor(index, toothCode)
     const s = displayStatusForTooth(index, toothCode)
 
     const cls =
-      s === "HEALTHY" ? "bg-gray-100 text-gray-700"
-      : s === "CARIES" ? "bg-red-100 text-red-700"
-      : s === "FILLING" ? "bg-amber-100 text-amber-800"
-      : s === "CROWN" ? "bg-indigo-100 text-indigo-700"
-      : s === "ENDODONTIC" ? "bg-purple-100 text-purple-700"
-      : s === "IMPLANT" ? "bg-emerald-100 text-emerald-700"
-      : s === "MISSING" ? "bg-gray-200 text-gray-700"
-      : "bg-gray-200 text-gray-700" // EXTRACTED
+      s === "HEALTHY"
+        ? "bg-gray-100 text-gray-700"
+        : s === "CARIES"
+          ? "bg-red-100 text-red-700"
+          : s === "FILLING"
+            ? "bg-amber-100 text-amber-800"
+            : s === "CROWN"
+              ? "bg-indigo-100 text-indigo-700"
+              : s === "ENDODONTIC"
+                ? "bg-purple-100 text-purple-700"
+                : s === "IMPLANT"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : s === "MISSING"
+                    ? "bg-gray-200 text-gray-700"
+                    : "bg-gray-200 text-gray-700"
+
+    const isHighlighted = highlightTooth === toothCode
+    const isSaved = savedTooth === toothCode
 
     return (
       <button
+        ref={setToothRef(toothCode)}
         key={toothCode}
         type="button"
         onClick={() => openEditor(toothCode)}
-        className={`relative rounded-xl px-2 py-2 text-xs font-semibold border border-gray-200 hover:bg-gray-50 ${cls}`}
+        className={[
+          "relative rounded-xl px-2 py-2 text-xs font-semibold border border-gray-200 hover:bg-gray-50",
+          "transition-transform",
+          cls,
+          isHighlighted ? "ring-2 ring-(--clinic-blue) ring-offset-2" : "",
+          isSaved ? "scale-[1.05]" : "",
+        ].join(" ")}
         title={`${toothCode} · ${statusLabel(s)}${badge ? ` · ${badge}` : ""}`}
       >
         {toothCode}
-
         {badge && (
           <span className="absolute -top-1 -right-1 rounded-full bg-gray-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
             {badge}
@@ -340,14 +599,6 @@ export default function ClinicalScreen() {
   }
 
   // --------- Hallazgos ----------
-  type Finding = {
-    toothCode: string
-    surface: ToothSurface
-    status: OdontogramStatus
-    note: string | null
-    key: string
-  }
-
   const findings = useMemo<Finding[]>(() => {
     const arr: Finding[] = []
     for (const it of data?.items ?? []) {
@@ -375,23 +626,53 @@ export default function ClinicalScreen() {
     return arr
   }, [data])
 
-    const findingsByTooth = useMemo(() => {
-        const map = new Map<string, Finding[]>()
-        for (const f of findings) {
-            const arr = map.get(f.toothCode) ?? []
-            arr.push(f)
-            map.set(f.toothCode, arr)
-        }
-        return map
-    }, [findings])
+  const findingsByTooth = useMemo(() => {
+    const map = new Map<string, Finding[]>()
 
+    for (const f of findings) {
+      const arr = map.get(f.toothCode) ?? []
+      arr.push(f)
+      map.set(f.toothCode, arr)
+    }
+
+    for (const [tooth, arr] of map) {
+      arr.sort((a, b) => (SURFACE_ORDER[a.surface] ?? 99) - (SURFACE_ORDER[b.surface] ?? 99))
+      map.set(tooth, arr)
+    }
+
+    const keys = Array.from(map.keys()).sort((a, b) => Number(a) - Number(b))
+    return { map, keys }
+  }, [findings])
 
   function statusChipClass(s: OdontogramStatus) {
-  return s === "CARIES" ? "bg-red-100 text-red-700"
-    : s === "FILLING" ? "bg-amber-100 text-amber-800"
-    : s === "IMPLANT" ? "bg-emerald-100 text-emerald-700"
-    : s === "EXTRACTED" ? "bg-gray-200 text-gray-700"
-    : "bg-gray-100 text-gray-700"
+    return s === "CARIES"
+      ? "bg-red-100 text-red-700"
+      : s === "FILLING"
+        ? "bg-amber-100 text-amber-800"
+        : s === "ENDODONTIC"
+          ? "bg-purple-100 text-purple-700"
+          : s === "IMPLANT"
+            ? "bg-emerald-100 text-emerald-700"
+            : s === "CROWN"
+              ? "bg-indigo-100 text-indigo-700"
+              : s === "MISSING"
+                ? "bg-gray-200 text-gray-700"
+                : s === "EXTRACTED"
+                  ? "bg-gray-200 text-gray-700"
+                  : "bg-gray-100 text-gray-700"
+  }
+
+  function handleFindingClick(f: Finding) {
+    pulseHighlight(f.toothCode)
+    setFlashOdontogram(true)
+    window.setTimeout(() => setFlashOdontogram(false), 200)
+
+    odontogramRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+    scrollToTooth(f.toothCode)
+
+    window.setTimeout(() => {
+      openEditor(f.toothCode, f.surface)
+    }, 220)
   }
 
   const showNotFound = !!patientId && !loading && error?.status === 404
@@ -463,9 +744,7 @@ export default function ClinicalScreen() {
                       <div className="font-semibold text-gray-900">
                         {p.lastName}, {p.firstName}
                       </div>
-                      <div className="text-xs text-gray-500">
-                        DNI {p.documentNumber} · #{p.id}
-                      </div>
+                      <div className="text-xs text-gray-500">DNI {p.documentNumber} · #{p.id}</div>
                     </button>
                   ))}
                 </div>
@@ -500,15 +779,19 @@ export default function ClinicalScreen() {
         </section>
       ) : showNotFound ? (
         <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          <EmptyState
-            title="Paciente no encontrado"
-            description="Seleccioná o creá un paciente para ver su odontograma."
-          />
+          <EmptyState title="Paciente no encontrado" description="Seleccioná o creá un paciente para ver su odontograma." />
         </section>
       ) : (
         <>
-          {/* ================== ODONTOGRAMA ================== */}
-          <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+          {/* ODONTOGRAMA */}
+          <section
+            ref={odontogramRef}
+            className={[
+              "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm",
+              "transition-[box-shadow,transform] duration-200",
+              flashOdontogram ? "ring-2 ring-(--clinic-blue) ring-offset-2 bg-blue-50/40 shadow-md" : "",
+            ].join(" ")}
+          >
             <div className="text-sm font-semibold text-gray-900">Odontograma</div>
 
             <div className="mt-3 grid gap-3">
@@ -520,79 +803,229 @@ export default function ClinicalScreen() {
             {loading && <div className="mt-3 text-xs text-gray-500">Cargando…</div>}
           </section>
 
-          {/* ================== HALLAZGOS ================== */}
-          <section className="mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">Hallazgos</div>
-                <div className="text-xs text-gray-500">Cambios registrados en el odontograma</div>
-              </div>
-              <span className="text-xs text-gray-500">{findings.length} item(s)</span>
-            </div>
-
+          {/* HALLAZGOS (colapsable) */}
+          <CollapsibleSection
+            storageKey="hallazgos"
+            title="Hallazgos"
+            subtitle="Cambios registrados en el odontograma"
+            count={findings.length}
+            defaultOpen
+          >
             {findings.length === 0 ? (
-              <div className="p-4 text-sm text-gray-500">
+              <div className="text-sm text-gray-500">
                 Todavía no hay registros. Tocá una pieza y guardá un estado.
               </div>
             ) : (
-              <div className="divide-y divide-gray-100">
-                {findings.map((f) => {
-                  const badge = surfacesBadgeFor(index, f.toothCode)
-                  return (
+              <div className="-mx-4">
+                <div className="divide-y divide-gray-100">
+                  {findingsByTooth.keys.map((toothCode) => {
+                    const items = findingsByTooth.map.get(toothCode) ?? []
+                    const sorted = sortFindingsForTooth(items)
+
+                    return (
+                      <div key={toothCode} className="px-4 py-3">
+                        <div className="mb-2 text-sm font-semibold text-gray-900">Pieza {toothCode}</div>
+
+                        <div className="space-y-1">
+                          {sorted.map((f) => (
+                            <button
+                              key={f.key}
+                              type="button"
+                              onClick={() => handleFindingClick(f)}
+                              onMouseEnter={() => setHighlightTooth(f.toothCode)}
+                              onMouseLeave={() => setHighlightTooth(null)}
+                              onFocus={() => setHighlightTooth(f.toothCode)}
+                              onBlur={() => setHighlightTooth(null)}
+                              onPointerDown={() => setHighlightTooth(f.toothCode)} // mobile friendly
+                              className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left hover:bg-gray-50"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-xs text-gray-700">{surfaceLabel(f.surface)}</div>
+                                {f.note && <div className="mt-0.5 truncate text-xs text-gray-500">{f.note}</div>}
+                              </div>
+
+                              <span
+                                className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusChipClass(
+                                  f.status
+                                )}`}
+                              >
+                                {statusLabel(f.status)}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            storageKey="Plan de tratamiento"
+            title="Plan de tratamiento"
+            subtitle="Procedimientos planificados para el paciente"
+            count={tpItems.length}
+            defaultOpen
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-gray-500">
+                {tpLoading ? "Cargando…" : " "}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setOpenTp(true)}
+                className="rounded-xl bg-(--clinic-blue) px-3 py-2 text-xs font-semibold text-white"
+              >
+                Agregar
+              </button>
+            </div>
+
+            {tpItems.length === 0 && !tpLoading ? (
+              <div className="mt-3 text-sm text-gray-500">Todavía no hay items en el plan.</div>
+            ) : (
+              <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100">
+                {tpItems.map((it) => (
+                  <div key={it.id} className="px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-900">
+                          {it.procedure}
+                          {it.toothCode ? ` · Pieza ${it.toothCode}` : ""}
+                          {it.surface ? ` · ${surfaceLabel(it.surface)}` : ""}
+                        </div>
+                        {it.notes && <div className="mt-0.5 text-xs text-gray-600 truncate">{it.notes}</div>}
+                        <div className="mt-1 text-xs text-gray-500">
+                          Estimado: ${Number(it.estimatedCost).toLocaleString("es-AR")}
+                        </div>
+                      </div>
+
+                      <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                        {it.status}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* RESUMEN (colapsable) */}
+          <CollapsibleSection storageKey="resumen" title="Resumen clínico" defaultOpen={false}>
+            <ul className="space-y-2 text-sm text-gray-700">
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500" />
+                  Piezas con caries
+                </span>
+                <b>{summary.caries}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
+                  Restauraciones
+                </span>
+                <b>{summary.fillings}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-purple-500" />
+                  Endodoncias
+                </span>
+                <b>{summary.endodontics}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-600" />
+                  Extraídas
+                </span>
+                <b>{summary.extracted}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-400" />
+                  Ausentes
+                </span>
+                <b>{summary.missing}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  Implantes
+                </span>
+                <b>{summary.implants}</b>
+              </li>
+
+              <li className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-indigo-500" />
+                  Coronas
+                </span>
+                <b>{summary.crowns}</b>
+              </li>
+            </ul>
+          </CollapsibleSection>
+
+          {/* HISTORIA CLÍNICA (colapsable) */}
+          <CollapsibleSection
+            storageKey="historia"
+            title="Historia clínica"
+            subtitle="Notas y cambios del odontograma"
+            count={eventsLoading ? undefined : events.length}
+            defaultOpen={false}
+          >
+            {eventsLoading ? (
+              <div className="text-sm text-gray-500">Cargando eventos…</div>
+            ) : events.length === 0 ? (
+              <div className="text-sm text-gray-500">Todavía no hay eventos clínicos.</div>
+            ) : (
+              <div className="-mx-4">
+                <div className="divide-y divide-gray-100">
+                  {events.map((e) => (
                     <button
-                      key={f.key}
+                      key={e.id}
                       type="button"
-                      onClick={() => openEditor(f.toothCode, f.surface)}
+                      onClick={() => {
+                        if (e.type === "ODONTOGRAM_CHANGE" && e.toothCode && e.surface) {
+                          handleFindingClick({
+                            toothCode: e.toothCode,
+                            surface: e.surface,
+                            status: e.toStatus ?? "HEALTHY",
+                            note: e.note ?? null,
+                            key: `${e.id}`,
+                          })
+                        }
+                      }}
                       className="w-full px-4 py-3 text-left hover:bg-gray-50"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-gray-900">
-                              {f.toothCode} · {surfaceLabel(f.surface)}
-                            </span>
-
-                            {badge && (
-                              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
-                                {badge}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="mt-1 text-xs text-gray-600">{statusLabel(f.status)}</div>
-
-                          {f.note && (
-                            <div className="mt-1 text-xs text-gray-500">
-                              {f.note}
-                            </div>
+                          <div className="text-sm font-semibold text-gray-900">{eventTitle(e)}</div>
+                          <div className="mt-0.5 text-xs text-gray-600">{eventSubtitle(e)}</div>
+                          {e.note && e.type === "ODONTOGRAM_CHANGE" && (
+                            <div className="mt-1 truncate text-xs text-gray-500">{e.note}</div>
                           )}
                         </div>
-
-                        <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-[11px] font-semibold text-gray-700">
-                          {f.status}
-                        </span>
+                        <div className="shrink-0 text-xs text-gray-500">{fmtDate(e.createdAt)}</div>
                       </div>
                     </button>
-                  )
-                })}
+                  ))}
+                </div>
               </div>
             )}
-          </section>
-          <section className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="text-sm font-semibold text-gray-900">Resumen clínico</div>
-
-            <ul className="mt-2 space-y-1 text-sm text-gray-700">
-                <li>🦷 Piezas con caries: <b>3</b></li>
-                <li>🧩 Restauraciones: <b>4</b></li>
-                <li>🪥 Endodoncias: <b>1</b></li>
-                <li>❌ Extraídas: <b>2</b></li>
-            </ul>
-          </section>
+          </CollapsibleSection>
         </>
       )}
 
       {/* Sheet: editar pieza */}
-      <BottomSheet open={open} title={`Pieza ${selTooth}`} onClose={() => setOpen(false)}>
+      <BottomSheet open={open} title={`Pieza ${selTooth}`} onClose={() => { setOpen(false); setSkipSyncOnce(false) }}>
         <div className="grid gap-4">
           {modalBadge && (
             <div className="text-xs text-gray-500">
@@ -677,6 +1110,120 @@ export default function ClinicalScreen() {
             selectPatient(p)
           }}
         />
+      </BottomSheet>
+      <BottomSheet open={openTp} title="Nuevo item" onClose={() => setOpenTp(false)}>
+        <div className="grid gap-4">
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Procedimiento</span>
+            <select
+              value={tpProcedure}
+              onChange={(e) => setTpProcedure(e.target.value as TreatmentProcedure)}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            >
+              <option value="CLEANING">Limpieza</option>
+              <option value="FILLING">Restauración</option>
+              <option value="ROOT_CANAL">Endodoncia</option>
+              <option value="EXTRACTION">Extracción</option>
+              <option value="WHITENING">Blanqueamiento</option>
+              <option value="ORTHODONTICS">Ortodoncia</option>
+              <option value="PROSTHESIS">Prótesis</option>
+              <option value="CONSULTATION">Consulta</option>
+              <option value="CONTROL_VISIT">Control</option>
+            </select>
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-gray-600">Pieza (opcional)</span>
+              <input
+                value={tpTooth}
+                onChange={(e) => setTpTooth(e.target.value)}
+                placeholder="Ej: 26"
+                className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-gray-600">Superficie</span>
+              <select
+                value={tpSurface}
+                onChange={(e) => setTpSurface(e.target.value as ToothSurface)}
+                className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+                disabled={!tpTooth.trim()}
+              >
+                {SURFACES.map((s) => (
+                  <option key={s} value={s}>
+                    {surfaceLabel(s)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Costo estimado</span>
+            <input
+              value={tpEstimated}
+              onChange={(e) => setTpEstimated(e.target.value)}
+              placeholder="Ej: 25000"
+              inputMode="decimal"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Notas</span>
+            <textarea
+              value={tpNotes}
+              onChange={(e) => setTpNotes(e.target.value)}
+              rows={3}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={async () => {
+              if (!patientId) return
+              if (!tpEstimated.trim()) {
+                setError({ status: 400, message: "estimatedCost es requerido" })
+                return
+              }
+
+              // regla backend: si surface viene, toothCode requerido -> lo cumplimos
+              const tooth = tpTooth.trim() ? tpTooth.trim() : null
+              const surf = tooth ? tpSurface : null
+
+              try {
+                setError(null)
+                const created = await createTreatmentPlanItem({
+                  patientId,
+                  procedure: tpProcedure,
+                  status: tpStatus,
+                  toothCode: tooth,
+                  surface: surf,
+                  estimatedCost: tpEstimated.trim(),
+                  notes: tpNotes.trim() ? tpNotes.trim() : null,
+                })
+                setTpItems((cur) => [created, ...cur])
+                setOpenTp(false)
+
+                // reset rápido
+                setTpProcedure("CLEANING")
+                setTpStatus("PLANNED")
+                setTpTooth("")
+                setTpSurface("GENERAL")
+                setTpEstimated("")
+                setTpNotes("")
+              } catch (e) {
+                setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+              }
+            }}
+            className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
+          >
+            Guardar
+          </button>
+        </div>
       </BottomSheet>
     </div>
   )

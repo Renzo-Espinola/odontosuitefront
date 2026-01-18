@@ -4,6 +4,30 @@ const PATIENTS_API_URL = import.meta.env.VITE_PATIENTS_API_URL ?? "http://localh
 
 export type AppointmentStatus = "SCHEDULED" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
 
+export type ClinicalEventType = "NOTE" | "ODONTOGRAM_CHANGE"
+
+export type ClinicalEventResponse = {
+  id: number
+  patientId: number
+  createdAt: string
+  type: ClinicalEventType
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  fromStatus?: OdontogramStatus | null
+  toStatus?: OdontogramStatus | null
+  note?: string | null
+}
+
+export type CreateClinicalEventRequest = {
+  patientId: number
+  type: ClinicalEventType
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  fromStatus?: OdontogramStatus | null
+  toStatus?: OdontogramStatus | null
+  note?: string | null
+}
+
 export type CashSummaryResponse = {
   from: string
   to: string
@@ -384,6 +408,27 @@ async function assertJson(res: Response) {
   }
 }
 
+// --- Clinical Events (Historia Clínica) ---
+// Vive en Patients service (8081)
+export async function fetchClinicalEvents(patientId: number, limit = 30): Promise<ClinicalEventResponse[]> {
+  const url = `${PATIENTS_API_URL}/api/clinical-events?patientId=${patientId}&limit=${limit}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function createClinicalEvent(bodyReq: CreateClinicalEventRequest): Promise<ClinicalEventResponse> {
+  const url = `${PATIENTS_API_URL}/api/clinical-events`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+
 export async function fetchOdontogram(patientId: number): Promise<OdontogramResponse> {
   const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram`
   const res = await fetch(url, { headers: { Accept: "application/json" } })
@@ -413,4 +458,61 @@ export async function deleteOdontogramItem(patientId: number, itemId: number): P
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
   }
 }
+
+// --- Treatment Plan (ADMIN 8082) ---
+export type TreatmentStatus = "PLANNED" | "IN_PROGRESS" | "DONE" | "CANCELLED"
+export type TreatmentProcedure =
+  | "CONSULTATION"
+  | "CLEANING"
+  | "FILLING"
+  | "ROOT_CANAL"
+  | "EXTRACTION"
+  | "ORTHODONTICS"
+  | "PROSTHESIS"
+  | "WHITENING"
+  | "CONTROL_VISIT"
+
+export type TreatmentPlanItemResponse = {
+  id: number
+  patientId: number
+  toothCode: string | null
+  surface: ToothSurface | null
+  procedure: TreatmentProcedure
+  status: TreatmentStatus
+  estimatedCost: number
+  finalCost: number | null
+  notes: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateTreatmentPlanItemRequest = {
+  patientId: number
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  procedure: TreatmentProcedure
+  status?: TreatmentStatus | null
+  estimatedCost: string // mandalo string por BigDecimal-friendly
+  notes?: string | null
+}
+
+export async function fetchTreatmentPlansByPatient(patientId: number): Promise<TreatmentPlanItemResponse[]> {
+  const url = `${API_BASE_URL}/api/treatment-plans/patient/${patientId}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function createTreatmentPlanItem(bodyReq: CreateTreatmentPlanItemRequest): Promise<TreatmentPlanItemResponse> {
+  const url = `${API_BASE_URL}/api/treatment-plans`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
 
