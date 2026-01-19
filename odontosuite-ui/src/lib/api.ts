@@ -460,17 +460,41 @@ export async function deleteOdontogramItem(patientId: number, itemId: number): P
 }
 
 // --- Treatment Plan (ADMIN 8082) ---
-export type TreatmentStatus = "PLANNED" | "IN_PROGRESS" | "DONE" | "CANCELLED"
+export type TreatmentStatus = "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+
 export type TreatmentProcedure =
-  | "CONSULTATION"
   | "CLEANING"
   | "FILLING"
   | "ROOT_CANAL"
   | "EXTRACTION"
   | "ORTHODONTICS"
-  | "PROSTHESIS"
+  | "IMPLANT"
+  | "CROWN"
   | "WHITENING"
   | "CONTROL_VISIT"
+  | "OTHER"
+
+export const TREATMENT_PROCEDURE_LABEL: Record<TreatmentProcedure, string> = {
+  CLEANING: "Limpieza / Profilaxis",
+  FILLING: "Restauración",
+  ROOT_CANAL: "Endodoncia",
+  EXTRACTION: "Extracción",
+  ORTHODONTICS: "Ortodoncia",
+  IMPLANT: "Implante",
+  CROWN: "Corona",
+  WHITENING: "Blanqueamiento",
+  CONTROL_VISIT: "Consulta / Control",
+  OTHER: "Otro",
+}
+
+// Dejá SOLO esta:
+export async function fetchTreatmentPlansByPatient(patientId: number): Promise<TreatmentPlanItemResponse[]> {
+  const url = `${API_BASE_URL}/api/treatment-plans/patient/${patientId}`
+  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  await assertJson(res)
+  return res.json()
+}
+
 
 export type TreatmentPlanItemResponse = {
   id: number
@@ -487,6 +511,17 @@ export type TreatmentPlanItemResponse = {
   updatedAt: string
 }
 
+export async function updateTreatmentPlanStatus(id: number, status: TreatmentStatus): Promise<TreatmentPlanItemResponse> {
+  const url = `${API_BASE_URL}/api/treatment-plans/${id}/status`
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ status }),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
 export type CreateTreatmentPlanItemRequest = {
   patientId: number
   toothCode?: string | null
@@ -495,13 +530,6 @@ export type CreateTreatmentPlanItemRequest = {
   status?: TreatmentStatus | null
   estimatedCost: string // mandalo string por BigDecimal-friendly
   notes?: string | null
-}
-
-export async function fetchTreatmentPlansByPatient(patientId: number): Promise<TreatmentPlanItemResponse[]> {
-  const url = `${API_BASE_URL}/api/treatment-plans/patient/${patientId}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
-  await assertJson(res)
-  return res.json()
 }
 
 export async function createTreatmentPlanItem(bodyReq: CreateTreatmentPlanItemRequest): Promise<TreatmentPlanItemResponse> {
@@ -514,5 +542,25 @@ export async function createTreatmentPlanItem(bodyReq: CreateTreatmentPlanItemRe
   await assertJson(res)
   return res.json()
 }
+
+export type UpdateTreatmentPlanItemRequest = {
+  finalCost?: string | null // mandalo string por BigDecimal-friendly
+  notes?: string | null
+}
+
+export async function updateTreatmentPlanItem(
+  id: number,
+  bodyReq: UpdateTreatmentPlanItemRequest
+): Promise<TreatmentPlanItemResponse> {
+  const url = `${API_BASE_URL}/api/treatment-plans/${id}`
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
 
 

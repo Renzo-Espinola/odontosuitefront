@@ -1,13 +1,19 @@
 // ClinicalScreen.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
+  TREATMENT_PROCEDURE_LABEL,
   fetchOdontogram,
   upsertOdontogramItem,
   searchPatients,
   fetchClinicalEvents,
-  createClinicalEvent,  
+  createClinicalEvent,
   fetchTreatmentPlansByPatient,
   createTreatmentPlanItem,
+  updateTreatmentPlanStatus,
+  createMovement,
+  updateTreatmentPlanItem,
+  type MovementConcept,
+  type PaymentMethod,
   type TreatmentPlanItemResponse,
   type TreatmentProcedure,
   type TreatmentStatus,
@@ -65,6 +71,22 @@ const SURFACE_ORDER: Record<ToothSurface, number> = {
   D: 3,
   B: 4,
   L: 5,
+}
+
+const VALID_TEETH = new Set([
+  "11","12","13","14","15","16","17","18",
+  "21","22","23","24","25","26","27","28",
+  "31","32","33","34","35","36","37","38",
+  "41","42","43","44","45","46","47","48",
+])
+
+function suggestedProcedureFromStatus(s: OdontogramStatus): TreatmentProcedure | null {
+  if (s === "CARIES") return "FILLING"
+  if (s === "ENDODONTIC") return "ROOT_CANAL"
+  if (s === "EXTRACTED") return "EXTRACTION"
+  if (s === "MISSING") return "IMPLANT"
+  if (s === "CROWN") return "CROWN"
+  return null
 }
 
 function statusLabel(s: OdontogramStatus) {
@@ -216,7 +238,7 @@ function CollapsibleSection({
     try {
       localStorage.setItem(fullKey, open ? "1" : "0")
     } catch {
-      // ignore (private mode / storage disabled)
+      // ignore
     }
   }, [fullKey, open])
 
@@ -282,6 +304,8 @@ export default function ClinicalScreen() {
   // historia clínica (timeline)
   const [events, setEvents] = useState<ClinicalEventResponse[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
+
+  // plan de tratamiento
   const [tpItems, setTpItems] = useState<TreatmentPlanItemResponse[]>([])
   const [tpLoading, setTpLoading] = useState(false)
 
@@ -293,6 +317,183 @@ export default function ClinicalScreen() {
   const [tpEstimated, setTpEstimated] = useState<string>("")
   const [tpNotes, setTpNotes] = useState<string>("")
 
+  // ✅ error local del formulario "Nuevo item" (plan)
+  const [tpFormError, setTpFormError] = useState<string | null>(null)
+
+  const STATUS_CYCLE: Record<TreatmentStatus, TreatmentStatus> = {
+    PLANNED: "IN_PROGRESS",
+    IN_PROGRESS: "COMPLETED",
+    COMPLETED: "COMPLETED",
+    CANCELLED: "CANCELLED",
+  }
+
+  // sugerencia odontograma -> plan
+  const [openTpSuggest, setOpenTpSuggest] = useState(false)
+  const [tpSuggestedFrom, setTpSuggestedFrom] = useState<{ tooth: string; surface: ToothSurface } | null>(null)
+
+  // aplicar plan -> odontograma + cobro
+  const [openApplyTpToOdo, setOpenApplyTpToOdo] = useState(false)
+  const [applyPlanItem, setApplyPlanItem] = useState<TreatmentPlanItemResponse | null>(null)
+  const [applyOdontoStatus, setApplyOdontoStatus] = useState<OdontogramStatus | null>(null)
+
+  const [openCharge, setOpenCharge] = useState(false)
+  const [chargeItem, setChargeItem] = useState<TreatmentPlanItemResponse | null>(null)
+  const [chargePaymentMethod, setChargePaymentMethod] = useState<PaymentMethod>("CASH")
+  const [chargeAmount, setChargeAmount] = useState<string>("")
+  const [chargeDescription, setChargeDescription] = useState<string>("")
+
+  // editar plan
+  const [openEditTp, setOpenEditTp] = useState(false)
+  const [editItem, setEditItem] = useState<TreatmentPlanItemResponse | null>(null)
+  const [editFinalCost, setEditFinalCost] = useState<string>("")
+  const [editNotes, setEditNotes] = useState<string>("")
+
+  function statusPillClass(s: TreatmentStatus) {
+    return s === "PLANNED"
+      ? "bg-gray-100 text-gray-700"
+      : s === "IN_PROGRESS"
+        ? "bg-blue-100 text-blue-700"
+        : s === "COMPLETED"
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-gray-200 text-gray-700"
+  }
+
+  function isValidToothCode(v: string) {
+    const t = v.trim()
+    if (!t) return true // porque es opcional
+    return VALID_TEETH.has(t)
+  }
+
+  function openEditPlanItem(it: TreatmentPlanItemResponse) {
+    setEditItem(it)
+    setEditFinalCost(it.finalCost != null ? String(it.finalCost) : "")
+    setEditNotes(it.notes ?? "")
+    setOpenEditTp(true)
+  }
+
+  function odontogramStatusFromProcedure(p: TreatmentProcedure): OdontogramStatus | null {
+    if (p === "FILLING") return "FILLING"
+    if (p === "ROOT_CANAL") return "ENDODONTIC"
+    if (p === "CROWN") return "CROWN"
+    if (p === "EXTRACTION") return "EXTRACTED"
+    if (p === "IMPLANT") return "IMPLANT"
+    return null
+  }
+
+  function requiresGeneralByOdontoStatus(s: OdontogramStatus) {
+    return s === "IMPLANT" || s === "EXTRACTED" || s === "MISSING"
+  }
+
+  function movementConceptFromProcedure(p: TreatmentProcedure): MovementConcept {
+    if (p === "CLEANING") return "CLEANING"
+    if (p === "FILLING") return "FILLING"
+    if (p === "ROOT_CANAL") return "ROOT_CANAL"
+    if (p === "EXTRACTION") return "EXTRACTION"
+    if (p === "ORTHODONTICS") return "ORTHODONTICS"
+    if (p === "WHITENING") return "WHITENING"
+    if (p === "CONTROL_VISIT") return "CONTROL_VISIT"
+    return "OTHER_INCOME"
+  }
+
+  function canChargeProcedure(_p: TreatmentProcedure) {
+    return true
+  }
+
+  function openChargeModal(it: TreatmentPlanItemResponse) {
+    const amount = String(it.finalCost ?? it.estimatedCost ?? "")
+    const descParts = [
+      `Plan: ${it.procedure}`,
+      it.toothCode ? `Pieza ${it.toothCode}` : null,
+      it.surface ? `Surf ${it.surface}` : null,
+    ].filter(Boolean)
+
+    setChargeItem(it)
+    setChargeAmount(amount)
+    setChargeDescription(descParts.join(" · "))
+    setChargePaymentMethod("CASH")
+    setOpenCharge(true)
+  }
+
+  async function cyclePlanStatus(itemId: number) {
+    const current = tpItems.find((x) => x.id === itemId)
+    if (!current) return
+
+    // ✅ solo avanza si está en PLANNED o IN_PROGRESS
+    if (!(current.status === "PLANNED" || current.status === "IN_PROGRESS")) return
+
+    const next = STATUS_CYCLE[current.status]
+
+    // optimista
+    setTpItems((cur) => cur.map((x) => (x.id === itemId ? { ...x, status: next } : x)))
+
+    try {
+      const updated = await updateTreatmentPlanStatus(itemId, next)
+      setTpItems((cur) => cur.map((x) => (x.id === itemId ? updated : x)))
+
+      maybeAskApplyToOdontogram(updated)
+    } catch {
+      // rollback
+      setTpItems((cur) => cur.map((x) => (x.id === itemId ? current : x)))
+    }
+  }
+
+  async function applyCompletedPlanToOdontogram() {
+    if (!patientId) return
+    if (!applyPlanItem?.toothCode) return
+    if (!applyOdontoStatus) return
+
+    const toothCode = applyPlanItem.toothCode
+    const desiredSurface: ToothSurface = applyPlanItem.surface ?? "GENERAL"
+    const finalSurface: ToothSurface = requiresGeneralByOdontoStatus(applyOdontoStatus) ? "GENERAL" : desiredSurface
+    const prev = index.get(keyOf(toothCode, finalSurface))?.status ?? "HEALTHY"
+
+    try {
+      setError(null)
+
+      const updatedOdo = await upsertOdontogramItem(patientId, {
+        toothCode,
+        surface: finalSurface,
+        status: applyOdontoStatus,
+        note: applyPlanItem.notes?.trim()
+          ? `Plan: ${applyPlanItem.notes.trim()}`
+          : `Aplicado desde Plan (${applyPlanItem.procedure})`,
+        createClinicalNote: false,
+      })
+
+      setData(updatedOdo)
+
+      const created = await createClinicalEvent({
+        patientId,
+        type: "ODONTOGRAM_CHANGE",
+        toothCode,
+        surface: finalSurface,
+        fromStatus: prev,
+        toStatus: applyOdontoStatus,
+        note: applyPlanItem.notes?.trim() ? applyPlanItem.notes.trim() : null,
+      })
+      setEvents((cur) => [created, ...cur])
+
+      pulseHighlight(toothCode)
+      setSavedTooth(toothCode)
+      window.setTimeout(() => setSavedTooth(null), 650)
+
+      const it = applyPlanItem
+
+      setOpenApplyTpToOdo(false)
+      setApplyPlanItem(null)
+      setApplyOdontoStatus(null)
+
+      if (it && canChargeProcedure(it.procedure)) {
+        openChargeModal(it)
+      }
+    } catch (e) {
+      setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  function requiresGeneral(s: OdontogramStatus) {
+    return s === "IMPLANT" || s === "EXTRACTED" || s === "MISSING"
+  }
 
   function setToothRef(code: string) {
     return (el: HTMLButtonElement | null) => {
@@ -307,10 +508,6 @@ export default function ClinicalScreen() {
       return
     }
     odontogramRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-  }
-
-  function requiresGeneral(s: OdontogramStatus) {
-    return s === "IMPLANT" || s === "EXTRACTED" || s === "MISSING"
   }
 
   function selectPatient(p: PatientResponse) {
@@ -360,13 +557,24 @@ export default function ClinicalScreen() {
     }
   }
 
+  function maybeAskApplyToOdontogram(it: TreatmentPlanItemResponse) {
+    if (it.status !== "COMPLETED") return
+    if (!it.toothCode) return
+    const odStatus = odontogramStatusFromProcedure(it.procedure)
+    if (!odStatus) return
+
+    setApplyPlanItem(it)
+    setApplyOdontoStatus(odStatus)
+    setOpenApplyTpToOdo(true)
+  }
+
   // cargar odontograma al seleccionar paciente
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patientId])
 
-  // cargar historia clínica al seleccionar paciente
+  // cargar historia clínica
   useEffect(() => {
     if (!patientId) {
       setEvents([])
@@ -385,6 +593,7 @@ export default function ClinicalScreen() {
     })()
   }, [patientId])
 
+  // cargar plan
   useEffect(() => {
     if (!patientId) {
       setTpItems([])
@@ -435,13 +644,12 @@ export default function ClinicalScreen() {
     return m
   }, [data])
 
-  // badge modal
   const modalBadge = useMemo(() => {
     if (!selTooth) return null
     return surfacesBadgeFor(index, selTooth)
   }, [index, selTooth])
 
-  // sync modal: cuando cambia (pieza/superficie) cargar lo existente
+  // sync modal odontograma
   useEffect(() => {
     if (!open || !selTooth) return
 
@@ -455,7 +663,7 @@ export default function ClinicalScreen() {
     setNote(existing?.note ?? "")
   }, [open, selTooth, surface, index, skipSyncOnce])
 
-  // si estado exige GENERAL, forzamos surface sin perder status/nota
+  // si estado exige GENERAL
   useEffect(() => {
     if (!open) return
     if (requiresGeneral(status) && surface !== "GENERAL") {
@@ -465,7 +673,6 @@ export default function ClinicalScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, open])
 
-  // abrir modal (opcionalmente en superficie concreta)
   function openEditor(toothCode: string, surf?: ToothSurface) {
     setError(null)
     setSelTooth(toothCode)
@@ -508,7 +715,6 @@ export default function ClinicalScreen() {
     try {
       setError(null)
 
-      // 1) actualizo odontograma
       const res = await upsertOdontogramItem(patientId, {
         toothCode: selTooth,
         surface,
@@ -520,7 +726,6 @@ export default function ClinicalScreen() {
       setData(res)
       setOpen(false)
 
-      // 2) creo evento
       const created = await createClinicalEvent({
         patientId,
         type: "ODONTOGRAM_CHANGE",
@@ -531,10 +736,31 @@ export default function ClinicalScreen() {
         note: noteTrimmed,
       })
 
-      // 3) actualizo timeline sin refetch
       setEvents((cur) => [created, ...cur])
 
-      // micro-ux
+      // ---- sugerencia odontograma -> plan ----
+      const suggested = suggestedProcedureFromStatus(status)
+      if (suggested) {
+        const alreadyExists = tpItems.some(
+          (x) =>
+            x.status !== "CANCELLED" &&
+            x.toothCode === selTooth &&
+            x.surface === surface &&
+            x.procedure === suggested
+        )
+
+        if (!alreadyExists) {
+          setTpProcedure(suggested)
+          setTpStatus("PLANNED")
+          setTpTooth(selTooth)
+          setTpSurface(surface)
+          setTpEstimated("")
+          setTpNotes(noteTrimmed ?? "")
+          setTpSuggestedFrom({ tooth: selTooth, surface })
+          setOpenTpSuggest(true)
+        }
+      }
+
       pulseHighlight(selTooth)
       setSavedTooth(selTooth)
       window.setTimeout(() => setSavedTooth(null), 650)
@@ -544,8 +770,8 @@ export default function ClinicalScreen() {
   }
 
   // --------- grid FDI ----------
-  const upper = ["18", "17", "16", "15", "14", "13", "12", "11", "21", "22", "23", "24", "25", "26", "27", "28"]
-  const lower = ["48", "47", "46", "45", "44", "43", "42", "41", "31", "32", "33", "34", "35", "36", "37", "38"]
+  const upper = ["18","17","16","15","14","13","12","11","21","22","23","24","25","26","27","28"]
+  const lower = ["48","47","46","45","44","43","42","41","31","32","33","34","35","36","37","38"]
   const allTeeth = useMemo(() => [...upper, ...lower], [])
   const summary = useMemo(() => summarizeTeeth(index, allTeeth), [index, allTeeth])
 
@@ -589,6 +815,7 @@ export default function ClinicalScreen() {
         title={`${toothCode} · ${statusLabel(s)}${badge ? ` · ${badge}` : ""}`}
       >
         {toothCode}
+
         {badge && (
           <span className="absolute -top-1 -right-1 rounded-full bg-gray-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
             {badge}
@@ -677,6 +904,9 @@ export default function ClinicalScreen() {
 
   const showNotFound = !!patientId && !loading && error?.status === 404
 
+  const tpToothTrim = tpTooth.trim()
+  const tpToothInvalid = !!tpToothTrim && !isValidToothCode(tpToothTrim)
+
   return (
     <div className="mx-auto w-full max-w-md">
       {/* Header */}
@@ -685,7 +915,6 @@ export default function ClinicalScreen() {
           <h1 className="text-xl font-semibold text-gray-900">Clínica</h1>
           <p className="text-sm text-gray-500">Odontograma (MVP)</p>
 
-          {/* Paciente seleccionado */}
           {selected ? (
             <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-4">
               <div className="text-xs font-semibold text-gray-600">Paciente</div>
@@ -764,7 +993,6 @@ export default function ClinicalScreen() {
         </button>
       </div>
 
-      {/* Error genérico */}
       {error && error.status !== 404 && (
         <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           <div className="font-semibold">Error</div>
@@ -772,7 +1000,6 @@ export default function ClinicalScreen() {
         </div>
       )}
 
-      {/* Body */}
       {!patientId ? (
         <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
           <EmptyState title="Seleccioná un paciente" description="Buscá por apellido o DNI para ver su odontograma." />
@@ -803,7 +1030,7 @@ export default function ClinicalScreen() {
             {loading && <div className="mt-3 text-xs text-gray-500">Cargando…</div>}
           </section>
 
-          {/* HALLAZGOS (colapsable) */}
+          {/* HALLAZGOS */}
           <CollapsibleSection
             storageKey="hallazgos"
             title="Hallazgos"
@@ -812,9 +1039,7 @@ export default function ClinicalScreen() {
             defaultOpen
           >
             {findings.length === 0 ? (
-              <div className="text-sm text-gray-500">
-                Todavía no hay registros. Tocá una pieza y guardá un estado.
-              </div>
+              <div className="text-sm text-gray-500">Todavía no hay registros. Tocá una pieza y guardá un estado.</div>
             ) : (
               <div className="-mx-4">
                 <div className="divide-y divide-gray-100">
@@ -836,7 +1061,7 @@ export default function ClinicalScreen() {
                               onMouseLeave={() => setHighlightTooth(null)}
                               onFocus={() => setHighlightTooth(f.toothCode)}
                               onBlur={() => setHighlightTooth(null)}
-                              onPointerDown={() => setHighlightTooth(f.toothCode)} // mobile friendly
+                              onPointerDown={() => setHighlightTooth(f.toothCode)}
                               className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left hover:bg-gray-50"
                             >
                               <div className="min-w-0">
@@ -862,21 +1087,23 @@ export default function ClinicalScreen() {
             )}
           </CollapsibleSection>
 
+          {/* PLAN */}
           <CollapsibleSection
-            storageKey="Plan de tratamiento"
+            storageKey="plan"
             title="Plan de tratamiento"
             subtitle="Procedimientos planificados para el paciente"
             count={tpItems.length}
             defaultOpen
           >
             <div className="flex items-center justify-between">
-              <div className="text-xs text-gray-500">
-                {tpLoading ? "Cargando…" : " "}
-              </div>
+              <div className="text-xs text-gray-500">{tpLoading ? "Cargando…" : " "}</div>
 
               <button
                 type="button"
-                onClick={() => setOpenTp(true)}
+                onClick={() => {
+                  setTpFormError(null)
+                  setOpenTp(true)
+                }}
                 className="rounded-xl bg-(--clinic-blue) px-3 py-2 text-xs font-semibold text-white"
               >
                 Agregar
@@ -887,32 +1114,73 @@ export default function ClinicalScreen() {
               <div className="mt-3 text-sm text-gray-500">Todavía no hay items en el plan.</div>
             ) : (
               <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-100">
-                {tpItems.map((it) => (
-                  <div key={it.id} className="px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-gray-900">
-                          {it.procedure}
-                          {it.toothCode ? ` · Pieza ${it.toothCode}` : ""}
-                          {it.surface ? ` · ${surfaceLabel(it.surface)}` : ""}
+                {tpItems.map((it) => {
+                  const isCancelled = it.status === "CANCELLED"
+                  const canAdvance = it.status === "PLANNED" || it.status === "IN_PROGRESS"
+
+                  return (
+                    <div key={it.id} className="px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-gray-900">
+                            {it.procedure}
+                            {it.toothCode ? ` · Pieza ${it.toothCode}` : ""}
+                            {it.surface ? ` · ${surfaceLabel(it.surface)}` : ""}
+                          </div>
+                          {it.notes && <div className="mt-0.5 text-xs text-gray-600 truncate">{it.notes}</div>}
+                          <div className="mt-1 text-xs text-gray-500">
+                            Estimado: ${Number(it.estimatedCost).toLocaleString("es-AR")}
+                          </div>
                         </div>
-                        {it.notes && <div className="mt-0.5 text-xs text-gray-600 truncate">{it.notes}</div>}
-                        <div className="mt-1 text-xs text-gray-500">
-                          Estimado: ${Number(it.estimatedCost).toLocaleString("es-AR")}
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditPlanItem(it)}
+                            disabled={isCancelled}
+                            className={[
+                              "rounded-full border border-gray-200 px-2 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50",
+                              isCancelled ? "opacity-60 cursor-not-allowed hover:bg-transparent" : "",
+                            ].join(" ")}
+                            title={isCancelled ? "Este item está cancelado" : "Editar"}
+                          >
+                            Editar
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => canAdvance && cyclePlanStatus(it.id)}
+                            disabled={isCancelled || !canAdvance}
+                            className={[
+                              `shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${statusPillClass(it.status)}`,
+                              isCancelled || !canAdvance ? "opacity-60 cursor-not-allowed" : "",
+                            ].join(" ")}
+                            title={
+                              isCancelled
+                                ? "Este item está cancelado"
+                                : it.status === "COMPLETED"
+                                  ? "Este item ya está realizado"
+                                  : "Tocá para avanzar el estado"
+                            }
+                          >
+                            {it.status === "PLANNED"
+                              ? "Planificado"
+                              : it.status === "IN_PROGRESS"
+                                ? "En curso"
+                                : it.status === "COMPLETED"
+                                  ? "Realizado"
+                                  : "Cancelado"}
+                          </button>
                         </div>
                       </div>
-
-                      <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
-                        {it.status}
-                      </span>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </CollapsibleSection>
 
-          {/* RESUMEN (colapsable) */}
+          {/* RESUMEN */}
           <CollapsibleSection storageKey="resumen" title="Resumen clínico" defaultOpen={false}>
             <ul className="space-y-2 text-sm text-gray-700">
               <li className="flex items-center justify-between">
@@ -973,7 +1241,7 @@ export default function ClinicalScreen() {
             </ul>
           </CollapsibleSection>
 
-          {/* HISTORIA CLÍNICA (colapsable) */}
+          {/* HISTORIA */}
           <CollapsibleSection
             storageKey="historia"
             title="Historia clínica"
@@ -1024,7 +1292,7 @@ export default function ClinicalScreen() {
         </>
       )}
 
-      {/* Sheet: editar pieza */}
+      {/* Sheet: editar pieza (odontograma) */}
       <BottomSheet open={open} title={`Pieza ${selTooth}`} onClose={() => { setOpen(false); setSkipSyncOnce(false) }}>
         <div className="grid gap-4">
           {modalBadge && (
@@ -1111,8 +1379,23 @@ export default function ClinicalScreen() {
           }}
         />
       </BottomSheet>
-      <BottomSheet open={openTp} title="Nuevo item" onClose={() => setOpenTp(false)}>
+
+      {/* Sheet: crear item plan */}
+      <BottomSheet
+        open={openTp}
+        title="Nuevo item"
+        onClose={() => {
+          setOpenTp(false)
+          setTpFormError(null)
+        }}
+      >
         <div className="grid gap-4">
+          {tpFormError && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {tpFormError}
+            </div>
+          )}
+
           <label className="grid gap-2">
             <span className="text-xs font-semibold text-gray-600">Procedimiento</span>
             <select
@@ -1120,15 +1403,11 @@ export default function ClinicalScreen() {
               onChange={(e) => setTpProcedure(e.target.value as TreatmentProcedure)}
               className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
             >
-              <option value="CLEANING">Limpieza</option>
-              <option value="FILLING">Restauración</option>
-              <option value="ROOT_CANAL">Endodoncia</option>
-              <option value="EXTRACTION">Extracción</option>
-              <option value="WHITENING">Blanqueamiento</option>
-              <option value="ORTHODONTICS">Ortodoncia</option>
-              <option value="PROSTHESIS">Prótesis</option>
-              <option value="CONSULTATION">Consulta</option>
-              <option value="CONTROL_VISIT">Control</option>
+              {Object.entries(TREATMENT_PROCEDURE_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
           </label>
 
@@ -1137,10 +1416,19 @@ export default function ClinicalScreen() {
               <span className="text-xs font-semibold text-gray-600">Pieza (opcional)</span>
               <input
                 value={tpTooth}
-                onChange={(e) => setTpTooth(e.target.value)}
+                onChange={(e) => {
+                  setTpTooth(e.target.value)
+                  setTpFormError(null)
+                }}
                 placeholder="Ej: 26"
-                className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+                className={[
+                  "rounded-2xl border px-4 py-3 text-sm",
+                  tpToothInvalid ? "border-red-300" : "border-gray-200",
+                ].join(" ")}
               />
+              {tpToothInvalid && (
+                <div className="text-[11px] text-red-700">La pieza debe ser FDI válida (11..48).</div>
+              )}
             </label>
 
             <label className="grid gap-2">
@@ -1149,7 +1437,7 @@ export default function ClinicalScreen() {
                 value={tpSurface}
                 onChange={(e) => setTpSurface(e.target.value as ToothSurface)}
                 className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
-                disabled={!tpTooth.trim()}
+                disabled={!tpToothTrim}
               >
                 {SURFACES.map((s) => (
                   <option key={s} value={s}>
@@ -1157,6 +1445,133 @@ export default function ClinicalScreen() {
                   </option>
                 ))}
               </select>
+            </label>
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Costo estimado</span>
+            <input
+              value={tpEstimated}
+              onChange={(e) => {
+                setTpEstimated(e.target.value)
+                setTpFormError(null)
+              }}
+              placeholder="Ej: 25000"
+              inputMode="decimal"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Notas</span>
+            <textarea
+              value={tpNotes}
+              onChange={(e) => setTpNotes(e.target.value)}
+              rows={3}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <button
+            type="button"
+            disabled={!patientId || !tpEstimated.trim() || tpToothInvalid}
+            onClick={async () => {
+              if (!patientId) return
+              setTpFormError(null)
+
+              if (!tpEstimated.trim()) {
+                setTpFormError("El costo estimado es requerido.")
+                return
+              }
+
+              const tooth = tpToothTrim ? tpToothTrim : null
+              if (tooth && !isValidToothCode(tooth)) {
+                setTpFormError("La pieza debe ser un FDI válido (ej: 11..48).")
+                return
+              }
+
+              const surf = tooth ? tpSurface : null
+
+              try {
+                setError(null)
+                const created = await createTreatmentPlanItem({
+                  patientId,
+                  procedure: tpProcedure,
+                  status: tpStatus,
+                  toothCode: tooth,
+                  surface: surf,
+                  estimatedCost: tpEstimated.trim(),
+                  notes: tpNotes.trim() ? tpNotes.trim() : null,
+                })
+                setTpItems((cur) => [created, ...cur])
+                setOpenTp(false)
+
+                // reset
+                setTpProcedure("CLEANING")
+                setTpStatus("PLANNED")
+                setTpTooth("")
+                setTpSurface("GENERAL")
+                setTpEstimated("")
+                setTpNotes("")
+                setTpFormError(null)
+              } catch (e) {
+                setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+              }
+            }}
+            className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            Guardar
+          </button>
+        </div>
+      </BottomSheet>
+
+      {/* Sheet: sugerencia odontograma -> plan */}
+      <BottomSheet
+        open={openTpSuggest}
+        title="Agregar al plan de tratamiento"
+        onClose={() => {
+          setOpenTpSuggest(false)
+          setTpSuggestedFrom(null)
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Se detectó un tratamiento sugerido para la pieza <b>{tpSuggestedFrom?.tooth}</b> ·{" "}
+            <b>{surfaceLabel(tpSuggestedFrom?.surface ?? "GENERAL")}</b>. ¿Querés agregarlo al plan?
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Procedimiento</span>
+            <select
+              value={tpProcedure}
+              onChange={(e) => setTpProcedure(e.target.value as TreatmentProcedure)}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            >
+              {Object.entries(TREATMENT_PROCEDURE_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-gray-600">Pieza</span>
+              <input
+                value={tpSuggestedFrom?.tooth ?? ""}
+                disabled
+                className="rounded-2xl border border-gray-200 px-4 py-3 text-sm disabled:bg-gray-50"
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold text-gray-600">Superficie</span>
+              <input
+                value={surfaceLabel(tpSuggestedFrom?.surface ?? "GENERAL")}
+                disabled
+                className="rounded-2xl border border-gray-200 px-4 py-3 text-sm disabled:bg-gray-50"
+              />
             </label>
           </div>
 
@@ -1181,48 +1596,296 @@ export default function ClinicalScreen() {
             />
           </label>
 
-          <button
-            type="button"
-            onClick={async () => {
-              if (!patientId) return
-              if (!tpEstimated.trim()) {
-                setError({ status: 400, message: "estimatedCost es requerido" })
-                return
-              }
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setOpenTpSuggest(false)
+                setTpSuggestedFrom(null)
+              }}
+              className="rounded-2xl border border-gray-200 px-4 py-4 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              Omitir
+            </button>
 
-              // regla backend: si surface viene, toothCode requerido -> lo cumplimos
-              const tooth = tpTooth.trim() ? tpTooth.trim() : null
-              const surf = tooth ? tpSurface : null
+            <button
+              type="button"
+              onClick={async () => {
+                if (!patientId) return
+                if (!tpEstimated.trim()) {
+                  setError({ status: 400, message: "estimatedCost es requerido" })
+                  return
+                }
+                if (!tpSuggestedFrom) return
 
-              try {
-                setError(null)
-                const created = await createTreatmentPlanItem({
-                  patientId,
-                  procedure: tpProcedure,
-                  status: tpStatus,
-                  toothCode: tooth,
-                  surface: surf,
-                  estimatedCost: tpEstimated.trim(),
-                  notes: tpNotes.trim() ? tpNotes.trim() : null,
-                })
-                setTpItems((cur) => [created, ...cur])
-                setOpenTp(false)
+                try {
+                  setError(null)
+                  const created = await createTreatmentPlanItem({
+                    patientId,
+                    procedure: tpProcedure,
+                    status: "PLANNED",
+                    toothCode: tpSuggestedFrom.tooth,
+                    surface: tpSuggestedFrom.surface,
+                    estimatedCost: tpEstimated.trim(),
+                    notes: tpNotes.trim() ? tpNotes.trim() : null,
+                  })
 
-                // reset rápido
-                setTpProcedure("CLEANING")
-                setTpStatus("PLANNED")
-                setTpTooth("")
-                setTpSurface("GENERAL")
-                setTpEstimated("")
-                setTpNotes("")
-              } catch (e) {
-                setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
-              }
-            }}
-            className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
-          >
-            Guardar
-          </button>
+                  setTpItems((cur) => [created, ...cur])
+
+                  setOpenTpSuggest(false)
+                  setTpSuggestedFrom(null)
+
+                  // reset
+                  setTpProcedure("CLEANING")
+                  setTpStatus("PLANNED")
+                  setTpTooth("")
+                  setTpSurface("GENERAL")
+                  setTpEstimated("")
+                  setTpNotes("")
+                } catch (e) {
+                  setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+                }
+              }}
+              className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
+            >
+              Agregar al plan
+            </button>
+          </div>
+        </div>
+      </BottomSheet>
+
+      {/* Sheet: aplicar plan al odontograma */}
+      <BottomSheet
+        open={openApplyTpToOdo}
+        title="Reflejar en odontograma"
+        onClose={() => {
+          setOpenApplyTpToOdo(false)
+          setApplyPlanItem(null)
+          setApplyOdontoStatus(null)
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+            El item quedó como <b>Realizado</b>.
+            <div className="mt-1">¿Querés reflejarlo en el odontograma?</div>
+            <div className="mt-2 text-xs text-blue-800">
+              {applyPlanItem?.procedure}
+              {applyPlanItem?.toothCode ? ` · Pieza ${applyPlanItem.toothCode}` : ""}
+              {applyPlanItem?.surface ? ` · ${surfaceLabel(applyPlanItem.surface)}` : ""}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                const it = applyPlanItem
+                setOpenApplyTpToOdo(false)
+                setApplyPlanItem(null)
+                setApplyOdontoStatus(null)
+
+                if (it && canChargeProcedure(it.procedure)) {
+                  openChargeModal(it)
+                }
+              }}
+              className="rounded-2xl border border-gray-200 px-4 py-4 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              No
+            </button>
+
+            <button
+              type="button"
+              onClick={applyCompletedPlanToOdontogram}
+              className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
+            >
+              Sí, aplicar
+            </button>
+          </div>
+        </div>
+      </BottomSheet>
+
+      {/* Sheet: registrar cobro */}
+      <BottomSheet
+        open={openCharge}
+        title="Registrar cobro"
+        onClose={() => {
+          setOpenCharge(false)
+          setChargeItem(null)
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            ¿Registrar cobro del plan?
+            <div className="mt-1 text-xs text-emerald-800">
+              {chargeItem?.procedure}
+              {chargeItem?.toothCode ? ` · Pieza ${chargeItem.toothCode}` : ""}
+              {chargeItem?.surface ? ` · ${surfaceLabel(chargeItem.surface)}` : ""}
+            </div>
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Medio de pago</span>
+            <select
+              value={chargePaymentMethod}
+              onChange={(e) => setChargePaymentMethod(e.target.value as PaymentMethod)}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            >
+              <option value="CASH">Efectivo</option>
+              <option value="CARD">Tarjeta</option>
+              <option value="TRANSFER">Transferencia</option>
+            </select>
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Monto</span>
+            <input
+              value={chargeAmount}
+              onChange={(e) => setChargeAmount(e.target.value)}
+              inputMode="decimal"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+              placeholder="Ej: 25000"
+            />
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Descripción</span>
+            <input
+              value={chargeDescription}
+              onChange={(e) => setChargeDescription(e.target.value)}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setOpenCharge(false)
+                setChargeItem(null)
+              }}
+              className="rounded-2xl border border-gray-200 px-4 py-4 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              Omitir
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                if (!chargeItem || !patientId) return
+                if (!chargeAmount.trim()) {
+                  setError({ status: 400, message: "amount es requerido" })
+                  return
+                }
+
+                try {
+                  setError(null)
+
+                  await createMovement({
+                    concept: movementConceptFromProcedure(chargeItem.procedure),
+                    paymentMethod: chargePaymentMethod,
+                    amount: chargeAmount.trim(),
+                    patientId,
+                    description: chargeDescription.trim() ? chargeDescription.trim() : null,
+                  })
+
+                  setOpenCharge(false)
+                  setChargeItem(null)
+                } catch (e) {
+                  setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+                }
+              }}
+              className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
+            >
+              Registrar
+            </button>
+          </div>
+        </div>
+      </BottomSheet>
+
+      {/* Sheet: editar item del plan */}
+      <BottomSheet
+        open={openEditTp}
+        title="Editar item del plan"
+        onClose={() => {
+          setOpenEditTp(false)
+          setEditItem(null)
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900">
+            <div className="font-semibold">{editItem?.procedure}</div>
+            <div className="mt-1 text-xs text-gray-600">
+              {editItem?.toothCode ? `Pieza ${editItem.toothCode}` : "Procedimiento global"}
+              {editItem?.surface ? ` · ${surfaceLabel(editItem.surface)}` : ""}
+            </div>
+          </div>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Costo final</span>
+            <input
+              value={editFinalCost}
+              onChange={(e) => setEditFinalCost(e.target.value)}
+              inputMode="decimal"
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+              placeholder="Opcional (ej: 30000)"
+            />
+            <div className="text-[11px] text-gray-500">
+              Si está vacío, queda sin costo final (se puede usar el estimado para cobro).
+            </div>
+          </label>
+
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold text-gray-600">Notas</span>
+            <textarea
+              value={editNotes}
+              onChange={(e) => setEditNotes(e.target.value)}
+              rows={3}
+              className="rounded-2xl border border-gray-200 px-4 py-3 text-sm"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!editItem) return
+                try {
+                  setError(null)
+                  const updated = await updateTreatmentPlanItem(editItem.id, {
+                    finalCost: editFinalCost.trim() ? editFinalCost.trim() : null,
+                    notes: editNotes.trim() ? editNotes.trim() : null,
+                  })
+                  setTpItems((cur) => cur.map((x) => (x.id === updated.id ? updated : x)))
+                  setOpenEditTp(false)
+                  setEditItem(null)
+                } catch (e) {
+                  setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+                }
+              }}
+              className="rounded-2xl bg-(--clinic-blue) px-4 py-4 text-sm font-semibold text-white shadow-sm active:scale-[0.99]"
+            >
+              Guardar
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                if (!editItem) return
+                try {
+                  setError(null)
+                  const updated = await updateTreatmentPlanStatus(editItem.id, "CANCELLED")
+                  setTpItems((cur) => cur.map((x) => (x.id === updated.id ? updated : x)))
+                  setOpenEditTp(false)
+                  setEditItem(null)
+                } catch (e) {
+                  setError({ status: 0, message: e instanceof Error ? e.message : String(e) })
+                }
+              }}
+              className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm font-semibold text-red-700 hover:bg-red-100"
+            >
+              Cancelar item
+            </button>
+          </div>
         </div>
       </BottomSheet>
     </div>
