@@ -414,6 +414,16 @@ export default function ClinicalScreen() {
     setOpenCharge(true)
   }
 
+  function resetTpForm() {
+    setTpProcedure("CLEANING")
+    setTpStatus("PLANNED")
+    setTpTooth("")
+    setTpSurface("GENERAL")
+    setTpEstimated("")
+    setTpNotes("")
+    setTpFormError(null) // si lo tenés
+  }
+
   async function cyclePlanStatus(itemId: number) {
     const current = tpItems.find((x) => x.id === itemId)
     if (!current) return
@@ -1386,7 +1396,7 @@ export default function ClinicalScreen() {
         title="Nuevo item"
         onClose={() => {
           setOpenTp(false)
-          setTpFormError(null)
+          resetTpForm()
         }}
       >
         <div className="grid gap-4">
@@ -1531,7 +1541,7 @@ export default function ClinicalScreen() {
         title="Agregar al plan de tratamiento"
         onClose={() => {
           setOpenTpSuggest(false)
-          setTpSuggestedFrom(null)
+          resetTpForm()
         }}
       >
         <div className="grid gap-4">
