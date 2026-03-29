@@ -1,5 +1,35 @@
 // src/lib/api.ts
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8082"
+import { getToken } from "./auth";
+import { conceptLabel } from "../lib/labels"
+
+const API_BASE_URL = import.meta.env.VITE_ADMIN_API_URL ?? "http://localhost:8082"
+const PATIENTS_API_URL = import.meta.env.VITE_PATIENTS_API_URL ?? "http://localhost:8001"
+
+export type AppointmentStatus = "SCHEDULED" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
+
+export type ClinicalEventType = "NOTE" | "ODONTOGRAM_CHANGE"
+
+export type ClinicalEventResponse = {
+  id: number
+  patientId: number
+  createdAt: string
+  type: ClinicalEventType
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  fromStatus?: OdontogramStatus | null
+  toStatus?: OdontogramStatus | null
+  note?: string | null
+}
+
+export type CreateClinicalEventRequest = {
+  patientId: number
+  type: ClinicalEventType
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  fromStatus?: OdontogramStatus | null
+  toStatus?: OdontogramStatus | null
+  note?: string | null
+}
 
 export type CashSummaryResponse = {
   from: string
@@ -9,9 +39,32 @@ export type CashSummaryResponse = {
   netTotal: number
 }
 
+async function apiFetch(url: string, init: RequestInit = {}) {
+  const token = getToken();
+
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Accept", "application/json");
+
+  // ✅ solo agrega Authorization si hay token
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  // si hay body json, setea content-type
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  return fetch(url, { ...init, headers });
+}
+
 export async function fetchCashSummary(from: string, to: string): Promise<CashSummaryResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
+
   const url = `${API_BASE_URL}/api/reports/cash/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: 
+    { Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -38,8 +91,13 @@ export type MoneyMovementResponse = {
 }
 
 export async function fetchMovements(from: string, to: string): Promise<MoneyMovementResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/cash/movements?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: 
+      { Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -123,10 +181,12 @@ export type CreateMoneyMovementRequest = {
 }
 
 export async function createMovement(bodyReq: CreateMoneyMovementRequest) {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/cash/movements`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json",  Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
 
@@ -142,3 +202,457 @@ export async function createMovement(bodyReq: CreateMoneyMovementRequest) {
 
   return res.json()
 }
+
+export type AppointmentResponse = {
+  id: number
+  patientId: number
+  startTime: string
+  endTime: string | null
+  status: AppointmentStatus
+  reason: string | null
+  notes: string | null
+  createdLate: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+
+export type CreateAppointmentRequest = {
+  patientId: number
+  startTime: string // LocalDateTime
+  endTime?: string | null
+  reason?: string | null
+  notes?: string | null
+}
+
+export async function fetchAppointments(from: string, to: string): Promise<AppointmentResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/appointments?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+  const res = await apiFetch(url, { headers: 
+      { Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+
+export async function fetchTodayAppointments(): Promise<AppointmentResponse[]> {
+  const { from, to } = todayRange()
+  return fetchAppointments(from, to)
+}
+
+export async function createAppointment(bodyReq: CreateAppointmentRequest): Promise<AppointmentResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/appointments`
+  const res = await apiFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}`},
+    body: JSON.stringify(bodyReq),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export async function updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<AppointmentResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/appointments/${id}/status`
+  const res = await apiFetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status }),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+
+// --- Patients service (PORT 8081) ---
+
+export type PatientResponse = {
+  id: number
+  firstName: string
+  lastName: string
+  documentNumber: string
+  birthDate: string | null
+  phone: string | null
+  email: string | null
+  address: string | null
+  obraSocial: string | null
+  obraSocialNumber: string | null
+  active: boolean
+}
+
+export async function searchPatientsByLastName(lastName: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients?lastName=${encodeURIComponent(lastName)}`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export async function searchPatients(q: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients/search?q=${encodeURIComponent(q)}`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+
+  return res.json()
+}
+
+export type CreatePatientRequest = {
+  firstName: string
+  lastName: string
+  documentNumber: string
+  birthDate?: string | null // YYYY-MM-DD
+  phone?: string | null
+  email?: string | null
+  address?: string | null
+  obraSocial?: string | null
+  obraSocialNumber?: string | null
+}
+
+export async function createPatient(bodyReq: CreatePatientRequest): Promise<PatientResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients`
+  const res = await apiFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(bodyReq),
+  })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+  return res.json()
+}
+
+export async function fetchPatients(lastName?: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const qs = lastName?.trim() ? `?lastName=${encodeURIComponent(lastName.trim())}` : ""
+  const url = `${PATIENTS_API_URL}/api/patients${qs}`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+  return res.json()
+}
+
+// --- Patients service (PORT 8081) --- (mismo PATIENTS_API_URL)
+
+export type ToothSurface = "GENERAL" | "O" | "M" | "D" | "B" | "L"
+
+export type OdontogramStatus =
+  | "HEALTHY"
+  | "CARIES"
+  | "FILLING"
+  | "CROWN"
+  | "ENDODONTIC"
+  | "IMPLANT"
+  | "MISSING"
+  | "EXTRACTED"
+
+export type OdontogramItemResponse = {
+  id: number
+  toothCode: string
+  surface: ToothSurface
+  status: OdontogramStatus
+  note: string | null
+}
+
+export type OdontogramResponse = {
+  odontogramId: number
+  patientId: number
+  items: OdontogramItemResponse[]
+}
+
+export type OdontogramItemUpsertRequest = {
+  toothCode: string
+  surface?: ToothSurface | null // UI puede mandar null
+  status: OdontogramStatus
+  note?: string | null
+  createClinicalNote?: boolean
+  clinicalDiagnosis?: string | null
+  clinicalTreatment?: string | null
+  clinicalObservations?: string | null
+}
+
+async function assertJson(res: Response) {
+  const contentType = res.headers.get("content-type") ?? ""
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+  if (!contentType.includes("application/json")) {
+    const body = await res.text()
+    throw new Error(`Respuesta no JSON: ${body.slice(0, 200)}`)
+  }
+}
+
+// --- Clinical Events (Historia Clínica) ---
+// Vive en Patients service (8081)
+export async function fetchClinicalEvents(patientId: number, limit = 30): Promise<ClinicalEventResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/clinical-events?patientId=${patientId}&limit=${limit}`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function createClinicalEvent(bodyReq: CreateClinicalEventRequest): Promise<ClinicalEventResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/clinical-events`
+  const res = await apiFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+
+export async function fetchOdontogram(patientId: number): Promise<OdontogramResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function upsertOdontogramItem(
+  patientId: number,
+  bodyReq: OdontogramItemUpsertRequest
+): Promise<OdontogramResponse> {
+    const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items`
+  const res = await apiFetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function deleteOdontogramItem(patientId: number, itemId: number): Promise<void> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items/${itemId}`
+  const res = await apiFetch(url, { method: "DELETE" })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+  }
+}
+
+// --- Treatment Plan (ADMIN 8082) ---
+export type TreatmentStatus = "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+
+export type TreatmentProcedure =
+  | "CLEANING"
+  | "FILLING"
+  | "ROOT_CANAL"
+  | "EXTRACTION"
+  | "ORTHODONTICS"
+  | "IMPLANT"
+  | "CROWN"
+  | "WHITENING"
+  | "CONTROL_VISIT"
+  | "OTHER"
+
+export const TREATMENT_PROCEDURE_LABEL: Record<TreatmentProcedure, string> = {
+  CLEANING: "Limpieza / Profilaxis",
+  FILLING: "Restauración",
+  ROOT_CANAL: "Endodoncia",
+  EXTRACTION: "Extracción",
+  ORTHODONTICS: "Ortodoncia",
+  IMPLANT: "Implante",
+  CROWN: "Corona",
+  WHITENING: "Blanqueamiento",
+  CONTROL_VISIT: "Consulta / Control",
+  OTHER: "Otro",
+}
+
+// Dejá SOLO esta:
+export async function fetchTreatmentPlansByPatient(patientId: number): Promise<TreatmentPlanItemResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/treatment-plans/patient/${patientId}`
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
+  await assertJson(res)
+  return res.json()
+}
+
+
+export type TreatmentPlanItemResponse = {
+  id: number
+  patientId: number
+  toothCode: string | null
+  surface: ToothSurface | null
+  procedure: TreatmentProcedure
+  status: TreatmentStatus
+  estimatedCost: number
+  finalCost: number | null
+  notes: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export async function updateTreatmentPlanStatus(id: number, status: TreatmentStatus): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/treatment-plans/${id}/status`
+  const res = await apiFetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status }),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+export type CreateTreatmentPlanItemRequest = {
+  patientId: number
+  toothCode?: string | null
+  surface?: ToothSurface | null
+  procedure: TreatmentProcedure
+  status?: TreatmentStatus | null
+  estimatedCost: string // mandalo string por BigDecimal-friendly
+  notes?: string | null
+}
+
+export async function createTreatmentPlanItem(bodyReq: CreateTreatmentPlanItemRequest): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/treatment-plans`
+  const res = await apiFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}`},
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+export type UpdateTreatmentPlanItemRequest = {
+  finalCost?: string | null // mandalo string por BigDecimal-friendly
+  notes?: string | null
+}
+
+export async function updateTreatmentPlanItem(
+  id: number,
+  bodyReq: UpdateTreatmentPlanItemRequest
+): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+  const url = `${API_BASE_URL}/api/treatment-plans/${id}`
+  const res = await apiFetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(bodyReq),
+  })
+  await assertJson(res)
+  return res.json()
+}
+
+export async function testCreateMovement() {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+
+  const r = await apiFetch("http://localhost:8082/api/movements", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      concept: "CLEANING",
+      paymentMethod: "CASH",
+      amount: "1000",
+      description: "test front",
+      patientId: null,
+    }),
+  })
+
+  const txt = await r.text()
+  if (!r.ok) throw new Error(txt)
+  console.log("MOVEMENT OK:", txt)
+  return JSON.parse(txt)
+}
+
+

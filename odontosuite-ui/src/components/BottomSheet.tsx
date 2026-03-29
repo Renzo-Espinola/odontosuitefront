@@ -32,7 +32,7 @@ export function BottomSheet({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[60]">
+    <div className="fixed inset-0 z-60">
       {/* overlay */}
       <div
         role="button"
