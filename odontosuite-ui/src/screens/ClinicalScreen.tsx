@@ -402,10 +402,11 @@ export default function ClinicalScreen() {
   function openChargeModal(it: TreatmentPlanItemResponse) {
     const amount = String(it.finalCost ?? it.estimatedCost ?? "")
     const descParts = [
-      `Plan: ${it.procedure}`,
+      `Plan: ${TREATMENT_PROCEDURE_LABEL[it.procedure] ?? it.procedure}`,
       it.toothCode ? `Pieza ${it.toothCode}` : null,
       it.surface ? `Surf ${it.surface}` : null,
     ].filter(Boolean)
+
 
     setChargeItem(it)
     setChargeAmount(amount)
@@ -1133,7 +1134,7 @@ export default function ClinicalScreen() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-gray-900">
-                            {it.procedure}
+                            {TREATMENT_PROCEDURE_LABEL[it.procedure] ?? it.procedure}
                             {it.toothCode ? ` · Pieza ${it.toothCode}` : ""}
                             {it.surface ? ` · ${surfaceLabel(it.surface)}` : ""}
                           </div>
@@ -1679,7 +1680,7 @@ export default function ClinicalScreen() {
             El item quedó como <b>Realizado</b>.
             <div className="mt-1">¿Querés reflejarlo en el odontograma?</div>
             <div className="mt-2 text-xs text-blue-800">
-              {applyPlanItem?.procedure}
+              {applyPlanItem ? (TREATMENT_PROCEDURE_LABEL[applyPlanItem.procedure] ?? applyPlanItem.procedure) : ""}
               {applyPlanItem?.toothCode ? ` · Pieza ${applyPlanItem.toothCode}` : ""}
               {applyPlanItem?.surface ? ` · ${surfaceLabel(applyPlanItem.surface)}` : ""}
             </div>
@@ -1727,7 +1728,7 @@ export default function ClinicalScreen() {
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
             ¿Registrar cobro del plan?
             <div className="mt-1 text-xs text-emerald-800">
-              {chargeItem?.procedure}
+              {chargeItem ? (TREATMENT_PROCEDURE_LABEL[chargeItem.procedure] ?? chargeItem.procedure) : ""}
               {chargeItem?.toothCode ? ` · Pieza ${chargeItem.toothCode}` : ""}
               {chargeItem?.surface ? ` · ${surfaceLabel(chargeItem.surface)}` : ""}
             </div>
@@ -1823,10 +1824,8 @@ export default function ClinicalScreen() {
       >
         <div className="grid gap-4">
           <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900">
-            <div className="font-semibold">{editItem?.procedure}</div>
-            <div className="mt-1 text-xs text-gray-600">
-              {editItem?.toothCode ? `Pieza ${editItem.toothCode}` : "Procedimiento global"}
-              {editItem?.surface ? ` · ${surfaceLabel(editItem.surface)}` : ""}
+            <div className="font-semibold">
+              {editItem ? (TREATMENT_PROCEDURE_LABEL[editItem.procedure] ?? editItem.procedure) : ""}
             </div>
           </div>
 

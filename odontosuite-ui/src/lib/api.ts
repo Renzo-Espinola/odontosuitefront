@@ -1,6 +1,9 @@
 // src/lib/api.ts
-const API_BASE_URL = import.meta.env.VITE_ADMIN_API_UR ?? "http://localhost:8082"
-const PATIENTS_API_URL = import.meta.env.VITE_PATIENTS_API_URL ?? "http://localhost:8081"
+import { getToken } from "./auth";
+import { conceptLabel } from "../lib/labels"
+
+const API_BASE_URL = import.meta.env.VITE_ADMIN_API_URL ?? "http://localhost:8082"
+const PATIENTS_API_URL = import.meta.env.VITE_PATIENTS_API_URL ?? "http://localhost:8001"
 
 export type AppointmentStatus = "SCHEDULED" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
 
@@ -36,9 +39,32 @@ export type CashSummaryResponse = {
   netTotal: number
 }
 
+async function apiFetch(url: string, init: RequestInit = {}) {
+  const token = getToken();
+
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Accept", "application/json");
+
+  // ✅ solo agrega Authorization si hay token
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  // si hay body json, setea content-type
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  return fetch(url, { ...init, headers });
+}
+
 export async function fetchCashSummary(from: string, to: string): Promise<CashSummaryResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
+
   const url = `${API_BASE_URL}/api/reports/cash/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: 
+    { Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -65,8 +91,13 @@ export type MoneyMovementResponse = {
 }
 
 export async function fetchMovements(from: string, to: string): Promise<MoneyMovementResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/cash/movements?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: 
+      { Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -150,10 +181,12 @@ export type CreateMoneyMovementRequest = {
 }
 
 export async function createMovement(bodyReq: CreateMoneyMovementRequest) {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/cash/movements`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json",  Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
 
@@ -193,8 +226,13 @@ export type CreateAppointmentRequest = {
 }
 
 export async function fetchAppointments(from: string, to: string): Promise<AppointmentResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/appointments?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: 
+      { Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -216,10 +254,12 @@ export async function fetchTodayAppointments(): Promise<AppointmentResponse[]> {
 }
 
 export async function createAppointment(bodyReq: CreateAppointmentRequest): Promise<AppointmentResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/appointments`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}`},
     body: JSON.stringify(bodyReq),
   })
 
@@ -237,10 +277,12 @@ export async function createAppointment(bodyReq: CreateAppointmentRequest): Prom
 }
 
 export async function updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<AppointmentResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/appointments/${id}/status`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ status }),
   })
 
@@ -275,8 +317,10 @@ export type PatientResponse = {
 }
 
 export async function searchPatientsByLastName(lastName: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients?lastName=${encodeURIComponent(lastName)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -292,8 +336,10 @@ export async function searchPatientsByLastName(lastName: string): Promise<Patien
 }
 
 export async function searchPatients(q: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients/search?q=${encodeURIComponent(q)}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -321,10 +367,12 @@ export type CreatePatientRequest = {
 }
 
 export async function createPatient(bodyReq: CreatePatientRequest): Promise<PatientResponse> {
+   const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
 
@@ -341,9 +389,11 @@ export async function createPatient(bodyReq: CreatePatientRequest): Promise<Pati
 }
 
 export async function fetchPatients(lastName?: string): Promise<PatientResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const qs = lastName?.trim() ? `?lastName=${encodeURIComponent(lastName.trim())}` : ""
   const url = `${PATIENTS_API_URL}/api/patients${qs}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
 
   const contentType = res.headers.get("content-type") ?? ""
   if (!res.ok) {
@@ -411,17 +461,21 @@ async function assertJson(res: Response) {
 // --- Clinical Events (Historia Clínica) ---
 // Vive en Patients service (8081)
 export async function fetchClinicalEvents(patientId: number, limit = 30): Promise<ClinicalEventResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/clinical-events?patientId=${patientId}&limit=${limit}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
   await assertJson(res)
   return res.json()
 }
 
 export async function createClinicalEvent(bodyReq: CreateClinicalEventRequest): Promise<ClinicalEventResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/clinical-events`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
   await assertJson(res)
@@ -430,8 +484,10 @@ export async function createClinicalEvent(bodyReq: CreateClinicalEventRequest): 
 
 
 export async function fetchOdontogram(patientId: number): Promise<OdontogramResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
   await assertJson(res)
   return res.json()
 }
@@ -440,10 +496,12 @@ export async function upsertOdontogramItem(
   patientId: number,
   bodyReq: OdontogramItemUpsertRequest
 ): Promise<OdontogramResponse> {
+    const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
   await assertJson(res)
@@ -451,8 +509,10 @@ export async function upsertOdontogramItem(
 }
 
 export async function deleteOdontogramItem(patientId: number, itemId: number): Promise<void> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${PATIENTS_API_URL}/api/patients/${patientId}/odontogram/items/${itemId}`
-  const res = await fetch(url, { method: "DELETE" })
+  const res = await apiFetch(url, { method: "DELETE" })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
@@ -489,8 +549,10 @@ export const TREATMENT_PROCEDURE_LABEL: Record<TreatmentProcedure, string> = {
 
 // Dejá SOLO esta:
 export async function fetchTreatmentPlansByPatient(patientId: number): Promise<TreatmentPlanItemResponse[]> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/treatment-plans/patient/${patientId}`
-  const res = await fetch(url, { headers: { Accept: "application/json" } })
+  const res = await apiFetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } })
   await assertJson(res)
   return res.json()
 }
@@ -512,10 +574,12 @@ export type TreatmentPlanItemResponse = {
 }
 
 export async function updateTreatmentPlanStatus(id: number, status: TreatmentStatus): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/treatment-plans/${id}/status`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ status }),
   })
   await assertJson(res)
@@ -533,10 +597,12 @@ export type CreateTreatmentPlanItemRequest = {
 }
 
 export async function createTreatmentPlanItem(bodyReq: CreateTreatmentPlanItemRequest): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/treatment-plans`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}`},
     body: JSON.stringify(bodyReq),
   })
   await assertJson(res)
@@ -552,15 +618,41 @@ export async function updateTreatmentPlanItem(
   id: number,
   bodyReq: UpdateTreatmentPlanItemRequest
 ): Promise<TreatmentPlanItemResponse> {
+  const token = getToken()
+  if (!token) throw new Error("No token")
   const url = `${API_BASE_URL}/api/treatment-plans/${id}`
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(bodyReq),
   })
   await assertJson(res)
   return res.json()
 }
 
+export async function testCreateMovement() {
+  const token = getToken()
+  if (!token) throw new Error("No token")
+
+  const r = await apiFetch("http://localhost:8082/api/movements", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      concept: "CLEANING",
+      paymentMethod: "CASH",
+      amount: "1000",
+      description: "test front",
+      patientId: null,
+    }),
+  })
+
+  const txt = await r.text()
+  if (!r.ok) throw new Error(txt)
+  console.log("MOVEMENT OK:", txt)
+  return JSON.parse(txt)
+}
 
 
